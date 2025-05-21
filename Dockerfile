@@ -28,7 +28,8 @@ WORKDIR /home/appuser/Grounded-SAM-2
 
 # Install essential Python packages
 RUN python -m pip install --upgrade pip "setuptools>=62.3.0,<75.9" wheel numpy \
-    opencv-python transformers supervision pycocotools addict yapf timm
+    opencv-python transformers==4.51.3 supervision pycocotools addict yapf timm pandas \
+    websockets Pillow
 
 # Install segment_anything package in editable mode
 RUN python -m pip install -e .

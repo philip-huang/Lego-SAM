@@ -1,4 +1,5 @@
 import torch
+import cv2
 import os
 import json
 from PIL import Image
@@ -7,6 +8,7 @@ from torch.nn.functional import cosine_similarity
 import glob
 import argparse
 import pandas as pd
+import numpy as np
 import torchvision.transforms
 from collections import Counter
 
@@ -73,6 +75,48 @@ def get_image_embedding(image_path, scale_shortest_edge): # Added scale_shortest
         print(f"Error processing image {image_path} for embedding at scale {scale_shortest_edge}: {e}")
         return None
 
+def calculate_mask_iou(img1, img2, threshold=10):
+    """
+    Calculates Intersection over Union (IoU) for two mask images.
+    Images are resized to target_size x target_size maintaining aspect ratio and padding.
+    """
+
+    def crop_img(img):
+        # Crop the image by taking a bounding box over non-zero pixels
+        # Find all non-zero points
+        coords = cv2.findNonZero(img)  # Returns a list of coordinates
+        # Get bounding box of non-zero pixels
+        x, y, w, h = cv2.boundingRect(coords)
+        cropped_img = img[y:y+h, x:x+w]
+        return cropped_img
+
+    try:
+        img1_cropped = crop_img(img1)
+        img2_cropped = crop_img(img2)
+        # pad the smaller image to match the size of the larger one
+        max_height = max(img1_cropped.shape[0], img2_cropped.shape[0])
+        max_width = max(img1_cropped.shape[1], img2_cropped.shape[1])
+        img1_padded = cv2.copyMakeBorder(img1_cropped, 0, max_height - img1_cropped.shape[0], 0, max_width - img1_cropped.shape[1], cv2.BORDER_CONSTANT, value=0)
+        img2_padded = cv2.copyMakeBorder(img2_cropped, 0, max_height - img2_cropped.shape[0], 0, max_width - img2_cropped.shape[1], cv2.BORDER_CONSTANT, value=0)
+
+        mask1_np = np.array(img1_padded)
+        mask2_np = np.array(img2_padded)
+
+        # Binarize the masks (pixels > threshold are foreground)
+        binary_mask1 = (mask1_np > threshold) 
+        binary_mask2 = (mask2_np > threshold)
+
+        intersection = np.logical_and(binary_mask1, binary_mask2).sum()
+        union = np.logical_or(binary_mask1, binary_mask2).sum()
+
+        if union == 0:
+            return 1.0 if intersection == 0 else 0.0 # Both masks empty (IoU=1), or issue (IoU=0)
+        
+        iou = float(intersection) / float(union)
+        return iou
+    except Exception as e:
+        print(f"Error processing images for IoU): {e}")
+        return 0.0
 
 # --- Helper Function to Extract Sim ID from Filename ---
 def extract_sim_id_from_filename(filename):
@@ -90,10 +134,16 @@ def extract_sim_id_from_filename(filename):
 
 
 # --- Main Evaluation Logic ---
-def run_evaluation(keys_to_eval, class_json_path, base_output_dir, results_file_path, aggregation_method):
+def run_evaluation(keys_to_eval, class_json_path, base_output_dir, results_file_path, aggregation_method, comparison_method): # Added comparison_method
     global device, processor, model
-    if not model:
-        setup_system()
+    if comparison_method == "embedding":
+        if not model: # Only setup model if using embeddings and not already setup
+            setup_system()
+    elif comparison_method == "geometric":
+        print("Using geometric IoU comparison. Embedding model will not be loaded.")
+    else:
+        print(f"Error: Unknown comparison_method: {comparison_method}")
+        return
 
     try:
         with open(class_json_path, 'r') as f:
@@ -111,6 +161,7 @@ def run_evaluation(keys_to_eval, class_json_path, base_output_dir, results_file_
         keys_to_eval = list(class_data.keys())
     
     print(f"Starting evaluation for keys: {', '.join(keys_to_eval)}")
+    print(f"Using comparison method: {comparison_method}")
     print(f"Using scales (shortest edge): {SCALES_SHORTEST_EDGE}")
     print(f"Using aggregation method: {aggregation_method}")
 
@@ -119,20 +170,22 @@ def run_evaluation(keys_to_eval, class_json_path, base_output_dir, results_file_
             print(f"Warning: Key '{key}' not found in class.json. Skipping.")
             continue
         
-        data_for_key = class_data[key]
-        # sim_ids_for_key = data_for_key.get("sim", []) # Not directly used in this revised logic for matching
+        data_for_key = class_data[key] 
         real_data_for_key = data_for_key.get("real", {})
 
         if not real_data_for_key:
             print(f"Warning: No 'real' data defined for key '{key}'. Skipping real processing for this key.")
             continue
 
-        # --- 1. Precompute Simulator Reference Embeddings for this key, all scales, and both cameras ---
-        sim_embeddings_this_key_cam_scale = {1: {}, 2: {}} # {cam_idx: {scale: {sim_path: embedding}}}
+         # --- 1. Precompute/Prepare Simulator References for this key, all scales, and both cameras ---
+        # For "embedding": {cam_idx: {scale: {sim_path: embedding}}}
+        # For "geometric": {cam_idx: {scale: {sim_path: sim_path}}} (path to mask)
+        sim_references_this_key_cam_scale = {1: {}, 2: {}} 
+
         print(f"\nPreprocessing simulator embeddings for key '{key}'...")
         for cam_idx in [1, 2]:
             for scale in SCALES_SHORTEST_EDGE:
-                sim_embeddings_this_key_cam_scale[cam_idx][scale] = {}
+                sim_references_this_key_cam_scale[cam_idx][scale] = {}
 
             sim_cam_folder_name = f"sim_cam{cam_idx}"
             sim_ref_dir = os.path.join(base_output_dir, sim_cam_folder_name, f"cutout_{key}")
@@ -149,16 +202,24 @@ def run_evaluation(keys_to_eval, class_json_path, base_output_dir, results_file_
                 print(f"  Warning: No simulator images found in {sim_ref_dir} for key '{key}', cam{cam_idx}.")
                 continue
             
-            print(f"  Processing {len(sim_files_in_dir)} sim references for key '{key}', cam{cam_idx} across {len(SCALES_SHORTEST_EDGE)} scales...")
+            if comparison_method == "embedding":
+                print(f"  Preprocessing {len(sim_files_in_dir)} sim embeddings for key '{key}', cam{cam_idx} across {len(SCALES_SHORTEST_EDGE)} scales...")
+            elif comparison_method == "geometric":
+                print(f"  Collecting {len(sim_files_in_dir)} sim mask paths for key '{key}', cam{cam_idx} (for {len(SCALES_SHORTEST_EDGE)} target sizes)...")
+            
             for sim_path in sim_files_in_dir:
                 for scale_val in SCALES_SHORTEST_EDGE:
-                    embedding = get_image_embedding(sim_path, scale_val)
-                    if embedding is not None:
-                        sim_embeddings_this_key_cam_scale[cam_idx][scale_val][sim_path] = embedding
+                    if comparison_method == "embedding":
+                        embedding = get_image_embedding(sim_path, scale_val)
+                        if embedding is not None:
+                            sim_references_this_key_cam_scale[cam_idx][scale_val][sim_path] = embedding
+                    elif comparison_method == "geometric":
+                        # Store the path; IoU will be computed on-the-fly with the real image.
+                        sim_references_this_key_cam_scale[cam_idx][scale_val][sim_path] = sim_path
         
         key_has_any_sim_embeddings = any(
-            sim_embeddings_this_key_cam_scale[c][s] 
-            for c in [1,2] for s in SCALES_SHORTEST_EDGE if s in sim_embeddings_this_key_cam_scale[c]
+            sim_references_this_key_cam_scale[c][s] 
+            for c in [1,2] for s in SCALES_SHORTEST_EDGE if s in sim_references_this_key_cam_scale[c]
         )
         if not key_has_any_sim_embeddings:
             print(f"Warning: No simulator embeddings could be generated for key '{key}' across any camera/scale. Skipping real processing for this key.")
@@ -182,27 +243,45 @@ def run_evaluation(keys_to_eval, class_json_path, base_output_dir, results_file_
                 found_real_files = glob.glob(search_path_pattern)
 
                 if not found_real_files:
-                    # print(f"    Info: No real image found for key '{key}', cam '{real_cam_folder_name}', ID '{real_id_str}' (pattern: {search_path_pattern})")
                     continue
                 
                 for real_image_path in found_real_files: # Typically one, but glob returns a list
                     # print(f"    Real image: {os.path.basename(real_image_path)}")
                     for scale_val in SCALES_SHORTEST_EDGE:
-                        current_sim_embeddings_for_cam_scale = sim_embeddings_this_key_cam_scale.get(cam_idx, {}).get(scale_val, {})
+                        current_sim_embeddings_for_cam_scale = sim_references_this_key_cam_scale.get(cam_idx, {}).get(scale_val, {})
                         if not current_sim_embeddings_for_cam_scale:
                             # print(f"      Skipping scale {scale_val} for {os.path.basename(real_image_path)}, no sim embeddings for cam{cam_idx} at this scale.")
                             continue
 
-                        real_embedding = get_image_embedding(real_image_path, scale_val)
-                        if real_embedding is None:
-                            # print(f"      Skipping scale {scale_val} for {os.path.basename(real_image_path)} due to real embedding error.")
-                            continue
+                        real_embedding = None
+                        if comparison_method == "embedding":
+                            real_embedding = get_image_embedding(real_image_path, scale_val)
+                            if real_embedding is None:
+                                # print(f"      Skipping scale {scale_val} for {os.path.basename(real_image_path)} due to real embedding error.")
+                                continue
+                        # For "geometric", real_image_path itself is used directly in calculate_mask_iou
+
 
                         best_match_sim_path_at_scale_cam = None
-                        highest_similarity_at_scale_cam = -2.0
+                        highest_similarity_at_scale_cam = -2.0 if comparison_method == "embedding" else -1.0 
 
-                        for sim_path, sim_embedding in current_sim_embeddings_for_cam_scale.items():
-                            similarity = cosine_similarity(real_embedding, sim_embedding, dim=1).item()
+                        for sim_path, sim_reference_data in current_sim_embeddings_for_cam_scale.items():
+                            similarity = -2.0 if comparison_method == "embedding" else -1.0 # Default to a very low score
+                            if comparison_method == "embedding":
+                                sim_embedding = sim_reference_data # This is the embedding
+                                if real_embedding is not None and sim_embedding is not None:
+                                    similarity = cosine_similarity(real_embedding, sim_embedding, dim=1).item()
+                            elif comparison_method == "geometric":
+                                sim_mask_path = sim_reference_data # This is the path to the sim mask
+                                try:
+                                    real_gray = cv2.imread(real_image_path, cv2.IMREAD_GRAYSCALE)
+                                    sim_gray = cv2.imread(sim_mask_path, cv2.IMREAD_GRAYSCALE)
+                                except Exception as e:
+                                    print(f"Error reading images for IoU calculation: {e}")
+                                    return 0.0
+                                similarity = calculate_mask_iou(real_gray, sim_gray) # scale_val is target_size  
+                                print(f"      IoU for {os.path.basename(real_image_path)} vs {os.path.basename(sim_mask_path)}: {similarity:.4f}")
+                            
                             if similarity > highest_similarity_at_scale_cam:
                                 highest_similarity_at_scale_cam = similarity
                                 best_match_sim_path_at_scale_cam = sim_path
@@ -220,11 +299,12 @@ def run_evaluation(keys_to_eval, class_json_path, base_output_dir, results_file_
             # --- 3. Majority Vote for this real_id_str ---
             final_predicted_sim_id = None
             is_correct = False
-            best_overall_similarity_for_pred = -2.0
+            best_overall_similarity_for_pred = -2.0 if comparison_method == "embedding" else -1.0
             aggregation_details_str = "N/A"
             num_contributions_for_pred = 0
 
             if individual_predictions_for_real_id:
+                min_possible_score = -3.0 if comparison_method == "embedding" else -1.0 # for IoU, scores are >=0
                 if aggregation_method == "vote":
                     votes = [pred[0] for pred in individual_predictions_for_real_id]
                     if votes:
@@ -241,11 +321,11 @@ def run_evaluation(keys_to_eval, class_json_path, base_output_dir, results_file_
                                 tied_vote_count = most_common_preds[0][1]
                                 candidates_in_tie = [item[0] for item in most_common_preds if item[1] == tied_vote_count]
                                 
-                                max_sim_for_tied_candidate = -3.0
+                                max_sim_for_tied_candidate = min_possible_score
                                 best_tied_candidate_id = final_predicted_sim_id # Default to first one
 
                                 for tied_candidate_id in candidates_in_tie:
-                                    current_max_sim_for_this_candidate = -3.0
+                                    current_max_sim_for_this_candidate = min_possible_score
                                     for pred_tuple in individual_predictions_for_real_id:
                                         if pred_tuple[0] == tied_candidate_id: # pred_tuple[0] is predicted_sim_id
                                             if pred_tuple[1] > current_max_sim_for_this_candidate: # pred_tuple[1] is similarity
@@ -269,7 +349,7 @@ def run_evaluation(keys_to_eval, class_json_path, base_output_dir, results_file_
                     scores_by_sim_id = {} # {sim_id: {'sum_score': float, 'count': int, 'max_individual_score': float}}
                     for pred_sim_id, sim_score, _, _, _ in individual_predictions_for_real_id:
                         if pred_sim_id not in scores_by_sim_id:
-                            scores_by_sim_id[pred_sim_id] = {'sum_score': 0.0, 'count': 0, 'max_individual_score': -3.0}
+                            scores_by_sim_id[pred_sim_id] = {'sum_score': 0.0, 'count': 0, 'max_individual_score': min_possible_score}
                         scores_by_sim_id[pred_sim_id]['sum_score'] += sim_score
                         scores_by_sim_id[pred_sim_id]['count'] += 1
                         if sim_score > scores_by_sim_id[pred_sim_id]['max_individual_score']:
@@ -417,6 +497,13 @@ if __name__ == "__main__":
         choices=["vote", "average"],
         help="Method to aggregate predictions from multiple scales/cameras: 'vote' for majority voting, 'average' for sum of scores (default: vote)"
     )
+    parser.add_argument(
+        "--comparison_method",
+        type=str,
+        default="embedding",
+        choices=["embedding", "geometric"],
+        help="Method for image comparison: 'embedding' for DINOv2 features, 'geometric' for mask IoU (default: embedding)"
+    )
 
     args = parser.parse_args()
     
@@ -428,4 +515,4 @@ if __name__ == "__main__":
     base_output_dir = args.base_dir if os.path.isabs(args.base_dir) else os.path.join(script_dir, args.base_dir)
     results_file_path = args.output_file if os.path.isabs(args.output_file) else os.path.join(script_dir, args.output_file)
 
-    run_evaluation(args.key, class_json_path, base_output_dir, results_file_path, args.aggregation_method)
+    run_evaluation(args.key, class_json_path, base_output_dir, results_file_path, args.aggregation_method, args.comparison_method)
