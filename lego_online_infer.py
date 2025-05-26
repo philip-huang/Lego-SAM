@@ -69,6 +69,7 @@ class OnlineLegoInferer:
             default_text_prompt=segmenter_text_prompt
         )
         self.sim_mask_info_cache = {} # Cache: {assembly_key: {sim_cam_name: {sim_id: path}}}
+        self.count = 0
 
     def _get_simulation_masks_for_key_and_cam(self, assembly_key: str, sim_camera_name: str) -> dict[int, str]:
         """
@@ -109,8 +110,7 @@ class OnlineLegoInferer:
         """
         segmenter = self.segmenter_cam1 if camera_name == "cam1" else self.segmenter_cam2
         
-        mask_np = segmenter.generate_single_mask_from_data(image_data_np) # text_prompt uses segmenter's default
-
+        mask_np = segmenter.generate_single_mask_from_data(image_data_np, text_prompt=segmenter.default_text_prompt, save_id = self.count) 
         if mask_np is None:
             # print(f"Debug: Segmentation returned None for live image from {camera_name}.")
             pass # Error already printed by LegoSegmenter or this method earlier
@@ -120,7 +120,8 @@ class OnlineLegoInferer:
     def infer_dual_camera(self,
                           live_image_cam1_np: np.ndarray, # Expected RGB
                           live_image_cam2_np: np.ndarray, # Expected RGB
-                          assembly_key: str
+                          assembly_key: str,
+                          cur_assembling_step: int = -1
                           ) -> tuple[int | None, float, dict]:
         """
         Performs inference using two live camera images against simulation masks.
@@ -141,6 +142,7 @@ class OnlineLegoInferer:
         """
         live_image_unique_id = f"{assembly_key}_{(time.time_ns()//100000000):d}"
 
+        self.count += 1
         live_cutout_cam1_data = self._segment_live_image(live_image_cam1_np, "cam1")
         live_cutout_cam2_data = self._segment_live_image(live_image_cam2_np, "cam2")        
 
@@ -149,8 +151,8 @@ class OnlineLegoInferer:
             return None, None, None, -1.0, {}
 
         # Save the segmented cutouts to temporary files (image is rgb)
-        live_cutout_cam1_path = self.temp_base_dir / f"live_cutout_{live_image_unique_id}_cam1.png"
-        live_cutout_cam2_path = self.temp_base_dir / f"live_cutout_{live_image_unique_id}_cam2.png"
+        live_cutout_cam1_path = self.temp_base_dir / f"live_cutout_{self.count:06d}_cam1.png"
+        live_cutout_cam2_path = self.temp_base_dir / f"live_cutout_{self.count:06d}_cam2.png"
         bgr_cutout_cam1_data = cv2.cvtColor(live_cutout_cam1_data, cv2.COLOR_RGB2BGR)
         bgr_cutout_cam2_data = cv2.cvtColor(live_cutout_cam2_data, cv2.COLOR_RGB2BGR)
         cv2.imwrite(str(live_cutout_cam2_path), bgr_cutout_cam2_data)
@@ -173,6 +175,9 @@ class OnlineLegoInferer:
         all_sim_id_results = {}
 
         for sim_id in unique_sim_ids:
+            if cur_assembling_step > -1 and sim_id >= cur_assembling_step:
+                # Skip sim_ids that are beyond the current assembly step
+                continue
             iou_cam1 = 0.0
             sim_mask_p1 = sim_masks_cam1_map.get(sim_id)
             if sim_mask_p1 is not None: # Ensure sim exist
@@ -228,57 +233,57 @@ if __name__ == "__main__":
     SAM2_CHECKPOINT = "./checkpoints/sam2.1_hiera_large.pt" # Path to your SAM2 model
     SAM2_CONFIG = "configs/sam2.1/sam2.1_hiera_l.yaml"    # Path to your SAM2 config
     
-    # Create dummy simulation masks and live images for testing
-    # This setup is simplified. Your actual sim masks would be more complex.
-    dummy_assembly_key = "test_assembly"
-    Path(SIM_DATA_ROOT, "sim_cam1", f"cutout_{dummy_assembly_key}").mkdir(parents=True, exist_ok=True)
-    Path(SIM_DATA_ROOT, "sim_cam2", f"cutout_{dummy_assembly_key}").mkdir(parents=True, exist_ok=True)
-
-    # Create dummy 100x100 black images with a white square for sim masks
-    for i in range(1, 3): # sim_id 1 and 2
-        for cam_idx in [1, 2]:
-            sim_mask = np.zeros((100, 100), dtype=np.uint8)
-            sim_mask[20:80, 20:20+(i*20)] = 255 # Different width for sim_id 1 vs 2
-            cv2.imwrite(
-                str(Path(SIM_DATA_ROOT, f"sim_cam{cam_idx}", f"cutout_{dummy_assembly_key}", f"cutout_000{i}_simcam{cam_idx}_mask_0.png")),
-                sim_mask
-            )
-    
-    # Create dummy live images (e.g., one that matches sim_id 0001 better)
-    live_img_cam1_np = np.zeros((480, 640, 3), dtype=np.uint8) # Dummy RGB
-    live_img_cam1_np[100:200, 100:150, :] = 128 # Some content for segmenter
-    
-    live_img_cam2_np = np.zeros((480, 640, 3), dtype=np.uint8) # Dummy RGB
-    live_img_cam2_np[150:250, 150:200, :] = 100
+    import argparse
+    parser = argparse.ArgumentParser(description="Run online Lego inference with dual cameras.")
+    parser.add_argument("task", type=str, help="Task name for the assembly (e.g., 'cliff').")
+    args = parser.parse_args()
+    assembly_key = args.task
 
     # Initialize inferer
     inferer = OnlineLegoInferer(
         sim_data_root_dir=SIM_DATA_ROOT,
         sam2_checkpoint_path=SAM2_CHECKPOINT,
         sam2_model_config_path=SAM2_CONFIG,
-        device="cpu" # Use "cuda" if available and desired
+        device="cuda" # Use "cuda" if available and desired
     )
 
-    print(f"Starting inference for assembly key: {dummy_assembly_key}")
-    best_id, best_score, details = inferer.infer_dual_camera(
-        live_image_cam1_np,
-        live_image_cam2_np,
-        dummy_assembly_key
-    )
+    live_image_dir1 = Path(SIM_DATA_ROOT, "cam1", assembly_key)
+    live_image_dir2 = Path(SIM_DATA_ROOT, "cam2", assembly_key)
 
-    print(f"\n--- Inference Results ---")
-    print(f"Best Matching Sim ID: {best_id}")
-    print(f"Best Combined IoU Score: {best_score:.4f}")
-    print("\nDetails per Sim ID:")
-    for sim_id, data in details.items():
-        print(f"  Sim ID {sim_id}:")
-        print(f"    Cam1 IoU: {data['cam1_iou']:.4f} (SimMask: {Path(data['cam1_sim_mask']).name if data['cam1_sim_mask'] else 'N/A'}, LiveCutout: {Path(data['live_cutout_cam1']).name if data['live_cutout_cam1'] else 'N/A'})")
-        print(f"    Cam2 IoU: {data['cam2_iou']:.4f} (SimMask: {Path(data['cam2_sim_mask']).name if data['cam2_sim_mask'] else 'N/A'}, LiveCutout: {Path(data['live_cutout_cam2']).name if data['live_cutout_cam2'] else 'N/A'})")
-        print(f"    Combined IoU: {data['combined_iou']:.4f}")
+    # open the live image folders and count the number of images
+    live_images_cam1 = list(live_image_dir1.glob("*.jpg"))
+    live_images_cam2 = list(live_image_dir2.glob("*.jpg"))
+    length = min(len(live_images_cam1), len(live_images_cam2))  # Ensure both cameras have the same number of images
+    print(f"Starting inference for assembly key: {assembly_key}")
+
+    for i in range(length):
+        img1_name = f'{i:06d}.jpg'
+        img2_name = f'{i:06d}.jpg'
+        live_image_cam1_np = cv2.imread(str(live_image_dir1 / img1_name), cv2.IMREAD_COLOR)
+        live_image_cam2_np = cv2.imread(str(live_image_dir2 / img2_name), cv2.IMREAD_COLOR)
+        
+
+        if live_image_cam1_np is None or live_image_cam2_np is None:
+            print(f"Error: Failed to read one of the live images for assembly key '{assembly_key}'.")
+            continue
+        live_image_cam1_np = cv2.cvtColor(live_image_cam1_np, cv2.COLOR_BGR2RGB)  # Convert to RGB
+        live_image_cam2_np = cv2.cvtColor(live_image_cam2_np, cv2.COLOR_BGR2RGB)
+        
+        cutout1, cutout2, best_id, best_score, details = inferer.infer_dual_camera(
+            live_image_cam1_np,
+            live_image_cam2_np,
+            assembly_key
+        )
+
+        print(f"\n--- Inference Results {i+1} ---")
+        print(f"Best Matching Sim ID: {best_id}")
+        print(f"Best Combined IoU Score: {best_score:.4f}")
+        # print("\nDetails:")
+        # for sim_id, data in details.items():
+        #     print(f"  Sim ID {sim_id}:")
+        #     print(f"    Cam1 IoU: {data['cam1_iou']:.4f} ")
+        #     print(f"    Cam2 IoU: {data['cam2_iou']:.4f} ")
+        #     print(f"    Combined IoU: {data['combined_iou']:.4f}")
 
     # Clean up all temporary files and directories created by the inferer
-    inferer.cleanup_all_temp_dirs()
-    # Clean up dummy sim files
-    shutil.rmtree(Path(SIM_DATA_ROOT, "sim_cam1", f"cutout_{dummy_assembly_key}"), ignore_errors=True)
-    shutil.rmtree(Path(SIM_DATA_ROOT, "sim_cam2", f"cutout_{dummy_assembly_key}"), ignore_errors=True)
-    print("Dummy files cleaned up.")
+    #inferer.cleanup_all_temp_dirs()

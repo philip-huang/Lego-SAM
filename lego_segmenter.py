@@ -69,20 +69,20 @@ class LegoSegmenter:
         self.dino_model = AutoModelForZeroShotObjectDetection.from_pretrained(self.grounding_dino_model_id).to(self.device)
 
         # Crop settings
-        # self.crop_box_dict = {
-        #     "cam1": (1350, 600, 2000, 1250),  # (x1, y1, x2, y2)
-        #     "cam2": (1300, 700, 1950, 1350),
-        #     "sim_cam1": (1400, 500, 2050, 1150),
-        #     "sim_cam2": (1550, 550, 2200, 1200),
-        #     "default": None
-        # }
         self.crop_box_dict = {
-            "cam1": (2050, 900, 2600, 1550),  # (x1, y1, x2, y2)
-            "cam2": (1150, 1000, 1700, 1600),
-            "sim_cam1": (2200, 900, 2750, 1550),
-            "sim_cam2": (1150, 900, 1700, 1550),
+            "cam1": (1350, 550, 2000, 1200),  # (x1, y1, x2, y2)
+            "cam2": (1600, 600, 2250, 1250),
+            "sim_cam1": (1400, 500, 2050, 1150),
+            "sim_cam2": (1550, 500, 2200, 1150),
             "default": None
         }
+        # self.crop_box_dict = {
+        #     "cam1": (2050, 900, 2600, 1550),  # (x1, y1, x2, y2)
+        #     "cam2": (1150, 1000, 1700, 1600),
+        #     "sim_cam1": (2200, 900, 2750, 1550),
+        #     "sim_cam2": (1150, 900, 1700, 1550),
+        #     "default": None
+        # }
         self.crop_box = self.crop_box_dict.get(self.camera_name, self.crop_box_dict["default"])
 
         # Annotators
@@ -221,7 +221,7 @@ class LegoSegmenter:
         mask[0][red_mask == 0] = 0
         return mask
 
-    def generate_single_mask_from_data(self, image_data_np: np.ndarray, text_prompt: str = None) -> np.ndarray | None:
+    def generate_single_mask_from_data(self, image_data_np: np.ndarray, text_prompt: str = None, save_id: int = None) -> np.ndarray | None:
         """
         Processes image data (NumPy array) in memory to get a single segmentation mask.
         Returns a 2D NumPy array (uint8, 0 or 255) for the mask, or None.
@@ -266,10 +266,10 @@ class LegoSegmenter:
         # Set alpha channel based on mask
         cutout_rgba[primary_mask_np_bool, 3] = 255
 
-        live_image_unique_id = f"{(time.time_ns()//100000000):d}"
-
-        image_np_bgr = cv2.cvtColor(image_np_rgb, cv2.COLOR_RGB2BGR)
-        self.save_dino_boxes(dino_boxes, sam_masks_tensor, dino_scores, dino_labels, image_np_bgr, live_image_unique_id)
+        if save_id is not None:
+            image_np_bgr = cv2.cvtColor(image_np_rgb, cv2.COLOR_RGB2BGR)
+            save_name = f'{save_id:06d}'
+            self.save_dino_boxes(dino_boxes, sam_masks_tensor, dino_scores, dino_labels, image_np_bgr, save_name)
             
         return cutout_rgba
 
@@ -303,7 +303,7 @@ class LegoSegmenter:
 
         # Create labels for visualization
         viz_labels = [
-            f"{name} {conf:.2f}"
+            f"{conf:.2f}"
             for name, conf in zip(dino_labels, dino_scores.cpu().numpy())
         ]
 
@@ -399,7 +399,7 @@ class LegoSegmenter:
 def main():
     parser = argparse.ArgumentParser(description="Lego Segmentation using Grounding DINO and SAM2.")
     parser.add_argument('--grounding-model', default="IDEA-Research/grounding-dino-base", help="Grounding DINO model ID.")
-    parser.add_argument("--text-prompt", default="assembled lego structure.", help="Default text prompt for detection.")
+    parser.add_argument("--text-prompt", default="assembled lego structure in center.", help="Default text prompt for detection.")
     parser.add_argument("--img-path", default="failure_images/cam1/camera1_0031_20250320_180547.png", help="Path to a single image.")
     parser.add_argument("--img-folder", help="Path to a folder of images. Overrides --img-path.")
     parser.add_argument("--camera-name", default="cam1", help="Camera name for crop settings (e.g., cam1, sim_cam2).")

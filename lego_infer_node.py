@@ -135,6 +135,7 @@ class DualCameraLegoClient:
         # --- Parameters (adjust as needed, or load from config file/env vars) ---
         self.cam1_topic = '/cam_destroyer/color/image_raw/compressed'
         self.cam2_topic = '/cam_architect/color/image_raw/compressed'
+        self.lego_topic = '/lego/assembling_step'
         
         # Paths should be valid within the Docker container
         sim_data_root = 'outputs' 
@@ -144,7 +145,7 @@ class DualCameraLegoClient:
         
         self.output_cutout1_topic = '/cam_destroyer/lego_cutout'
         self.output_cutout2_topic = '/cam_architect/lego_cutout'
-        self.output_detection_topic = '/lego_completed_step' # Publishes std_msgs/String
+        self.output_detection_topic = '/lego/completed_step' # Publishes std_msgs/String
 
         # Ensure paths are absolute or correctly relative to the script's location in Docker
         script_dir = Path(__file__).parent.resolve()
@@ -227,14 +228,14 @@ class DualCameraLegoClient:
         )
         live_cutout_cam1_rgba, live_cutout_cam2_rgba, best_sim_id, best_score, _ = results
 
-        # Publish cutouts (RGBA)
-        if live_cutout_cam1_rgba is not None:
-            cutout1_msg_data = cv_image_to_ros_image_json(live_cutout_cam1_rgba, "rgba8", header_cam1_orig['frame_id'], header_cam1_orig['stamp']['secs'] + header_cam1_orig['stamp']['nsecs']*1e-9)
-            await self.publish_message(self.websocket_connection, self.output_cutout1_topic, "sensor_msgs/CompressedImage", cutout1_msg_data)
+        # # Publish cutouts (RGBA)
+        # if live_cutout_cam1_rgba is not None:
+        #     cutout1_msg_data = cv_image_to_ros_image_json(live_cutout_cam1_rgba, "rgba8", header_cam1_orig['frame_id'], header_cam1_orig['stamp']['secs'] + header_cam1_orig['stamp']['nsecs']*1e-9)
+        #     await self.publish_message(self.websocket_connection, self.output_cutout1_topic, "sensor_msgs/CompressedImage", cutout1_msg_data)
         
-        if live_cutout_cam2_rgba is not None:
-            cutout2_msg_data = cv_image_to_ros_image_json(live_cutout_cam2_rgba, "rgba8", header_cam2_orig['frame_id'], header_cam2_orig['stamp']['secs'] + header_cam2_orig['stamp']['nsecs']*1e-9)
-            await self.publish_message(self.websocket_connection, self.output_cutout2_topic, "sensor_msgs/CompressedImage", cutout2_msg_data)
+        # if live_cutout_cam2_rgba is not None:
+        #     cutout2_msg_data = cv_image_to_ros_image_json(live_cutout_cam2_rgba, "rgba8", header_cam2_orig['frame_id'], header_cam2_orig['stamp']['secs'] + header_cam2_orig['stamp']['nsecs']*1e-9)
+        #     await self.publish_message(self.websocket_connection, self.output_cutout2_topic, "sensor_msgs/CompressedImage", cutout2_msg_data)
 
         # Publish detection result (std_msgs/String)
         detection_data_str = f'step: {best_sim_id}, score: {best_score:.4f}, task: {self.task}'

@@ -1,71 +1,71 @@
 key,real_image_id_str,representative_real_image_path,true_sim_id,final_predicted_sim_id,aggregation_method,num_contributions_for_prediction,total_individual_predictions,aggregation_details,metric_for_prediction,is_correct
-S,0,cutout_camera1_0000_20250320_174753_mask_0.png,1,1,average,2,2,{1: 0.9876075088977814},0.9876,True
-S,1,cutout_camera1_0001_20250320_174908_mask_0.png,1,1,average,2,2,{1: 1.2143297791481018},1.2143,True
-S,2,cutout_camera1_0002_20250320_175107_mask_0.png,2,2,average,1,2,"{1: 0.5155619382858276, 2: 0.6966968774795532}",0.6967,True
-S,3,cutout_camera1_0003_20250320_175124_mask_0.png,2,2,average,1,2,"{1: 0.5018725395202637, 2: 0.6925157904624939}",0.6925,True
-S,4,cutout_camera1_0004_20250320_175137_mask_0.png,2,2,average,1,2,"{1: 0.517916202545166, 2: 0.6861897706985474}",0.6862,True
-S,5,cutout_camera1_0005_20250320_175154_mask_0.png,5,2,average,1,2,"{6: 0.5204308032989502, 2: 0.6873511672019958}",0.6874,False
-S,6,cutout_camera1_0006_20250320_175205_mask_0.png,6,6,average,2,2,{6: 1.140590786933899},1.1406,True
-S,7,cutout_camera1_0007_20250320_175218_mask_0.png,7,6,average,1,2,"{7: 0.47244957089424133, 6: 0.6711090803146362}",0.6711,False
-S,8,cutout_camera1_0008_20250320_175231_mask_0.png,8,8,average,1,2,"{0: 0.4590567350387573, 8: 0.6508259177207947}",0.6508,True
-S,9,cutout_camera1_0009_20250320_175247_mask_0.png,7,6,average,1,2,"{7: 0.4799685478210449, 6: 0.6387890577316284}",0.6388,False
-S,10,cutout_camera1_0010_20250320_175302_mask_0.png,0,0,average,2,2,{0: 1.1307497322559357},1.1307,True
-R,11,cutout_camera1_0011_20250320_175401_mask_0.png,11,11,average,1,2,"{11: 0.6182248592376709, 13: 0.5857216119766235}",0.6182,True
-R,12,cutout_camera1_0012_20250320_175416_mask_0.png,12,11,average,1,2,"{11: 0.6304283142089844, 13: 0.6019219160079956}",0.6304,False
-R,13,cutout_camera1_0013_20250320_175453_mask_0.png,13,13,average,2,2,{13: 1.2689979076385498},1.2690,True
-R,14,cutout_camera1_0014_20250320_175507_mask_0.png,13,13,average,2,2,{13: 1.3025767803192139},1.3026,True
-R,15,cutout_camera1_0015_20250320_175542_mask_0.png,13,12,average,1,2,"{12: 0.670376718044281, 13: 0.6125372648239136}",0.6704,False
-R,16,cutout_camera1_0016_20250320_175556_mask_0.png,13,13,average,2,2,{13: 1.2601722478866577},1.2602,True
-R,17,cutout_camera1_0017_20250320_175611_mask_0.png,17,17,average,1,2,"{17: 0.6603302955627441, 13: 0.6112388372421265}",0.6603,True
-R,19,cutout_camera1_0019_20250320_175651_mask_0.png,18,17,average,1,2,"{17: 0.6682131290435791, 18: 0.6159792542457581}",0.6682,False
-stairs_branched,20,cutout_camera1_0020_20250320_175905_mask_0.png,20,20,average,2,2,{20: 1.082907348871231},1.0829,True
-stairs_branched,21,cutout_camera1_0021_20250320_175920_mask_0.png,24,28,average,1,2,"{28: 0.567459225654602, 27: 0.5145224928855896}",0.5675,False
-stairs_branched,22,cutout_camera1_0022_20250320_175929_mask_0.png,23,20,average,2,2,{20: 1.1037021279335022},1.1037,False
-stairs_branched,23,cutout_camera1_0023_20250320_175952_mask_0.png,23,20,average,2,2,{20: 1.1120615601539612},1.1121,False
-stairs_branched,24,cutout_camera1_0024_20250320_180012_mask_0.png,24,28,average,1,2,"{28: 0.6343761682510376, 24: 0.5979620218276978}",0.6344,False
-stairs_branched,25,cutout_camera1_0025_20250320_180040_mask_0.png,24,27,average,1,2,"{23: 0.5383545756340027, 27: 0.5557237267494202}",0.5557,False
-stairs_branched,26,cutout_camera1_0026_20250320_180051_mask_0.png,28,28,average,1,2,"{23: 0.5542855262756348, 28: 0.5931786298751831}",0.5932,True
-stairs_branched,27,cutout_camera1_0027_20250320_180100_mask_0.png,27,27,average,1,2,"{23: 0.51998370885849, 27: 0.5622159242630005}",0.5622,True
-stairs_branched,28,cutout_camera1_0028_20250320_180109_mask_0.png,28,28,average,1,2,"{28: 0.6158238649368286, 27: 0.5906792879104614}",0.6158,True
-stairs_branched,29,cutout_camera1_0029_20250320_180159_mask_0.png,29,20,average,2,2,{20: 1.1276028156280518},1.1276,False
-faucet,30,cutout_camera1_0030_20250320_180424_mask_0.png,30,43,average,2,2,{43: 1.1930813789367676},1.1931,False
-faucet,31,cutout_camera1_0031_20250320_180547_mask_0.png,31,43,average,2,2,{43: 1.1527851223945618},1.1528,False
-faucet,32,cutout_camera1_0032_20250320_180608_mask_0.png,31,43,average,2,2,{43: 1.1390082836151123},1.1390,False
-faucet,33,cutout_camera1_0033_20250320_180627_mask_0.png,33,43,average,2,2,{43: 1.1302226185798645},1.1302,False
-faucet,34,cutout_camera1_0034_20250320_180639_mask_0.png,34,34,average,1,2,"{34: 0.5812954902648926, 43: 0.5412663817405701}",0.5813,True
-faucet,35,cutout_camera1_0035_20250320_180712_mask_0.png,35,43,average,2,2,{43: 1.1399075984954834},1.1399,False
-faucet,36,cutout_camera1_0036_20250320_180724_mask_0.png,35,43,average,1,2,"{34: 0.520043134689331, 43: 0.5918916463851929}",0.5919,False
-faucet,37,cutout_camera1_0037_20250320_180740_mask_0.png,35,43,average,2,2,{43: 1.1132380962371826},1.1132,False
-faucet,38,cutout_camera1_0038_20250320_180817_mask_0.png,38,43,average,2,2,{43: 1.1832355260849},1.1832,False
-faucet,39,cutout_camera1_0039_20250320_180826_mask_0.png,39,43,average,2,2,{43: 1.1785245537757874},1.1785,False
-faucet,40,cutout_camera1_0040_20250320_180856_mask_0.png,40,43,average,2,2,{43: 1.1252588033676147},1.1253,False
-faucet,41,cutout_camera1_0041_20250320_180907_mask_0.png,41,43,average,2,2,{43: 1.1935425996780396},1.1935,False
-faucet,42,cutout_camera1_0042_20250320_180948_mask_0.png,42,43,average,2,2,{43: 1.1527206897735596},1.1527,False
-faucet,43,cutout_camera1_0043_20250320_181001_mask_0.png,43,43,average,2,2,{43: 1.135001301765442},1.1350,True
-faucet,44,cutout_camera1_0044_20250320_181010_mask_0.png,44,43,average,2,2,{43: 1.1369735598564148},1.1370,False
-cliff,45,cutout_camera1_0045_20250320_181251_mask_0.png,45,45,average,2,2,{45: 1.2545220851898193},1.2545,True
-cliff,46,cutout_camera1_0046_20250320_181339_mask_0.png,46,45,average,2,2,{45: 1.261859655380249},1.2619,False
-cliff,47,cutout_camera1_0047_20250320_181351_mask_0.png,49,45,average,1,2,"{46: 0.6641894578933716, 45: 0.6738064289093018}",0.6738,False
-cliff,48,cutout_camera1_0048_20250320_181400_mask_0.png,49,51,average,1,2,"{51: 0.617225170135498, 52: 0.5871100425720215}",0.6172,False
-cliff,49,cutout_camera1_0049_20250320_181421_mask_0.png,49,46,average,1,2,"{46: 0.6399211287498474, 45: 0.6253466606140137}",0.6399,False
-cliff,50,cutout_camera1_0050_20250320_181449_mask_0.png,49,45,average,1,2,"{46: 0.6300748586654663, 45: 0.6456413865089417}",0.6456,False
-cliff,51,cutout_camera1_0051_20250320_181457_mask_0.png,51,51,average,1,2,"{51: 0.6246982216835022, 49: 0.6196234226226807}",0.6247,True
-cliff,52,cutout_camera1_0052_20250320_181520_mask_0.png,52,52,average,1,2,"{51: 0.6199403405189514, 52: 0.6721951961517334}",0.6722,True
-cliff,53,cutout_camera1_0053_20250320_181531_mask_0.png,52,55,average,1,2,"{51: 0.6391376852989197, 55: 0.6864008903503418}",0.6864,False
-cliff,54,cutout_camera1_0054_20250320_181541_mask_0.png,54,55,average,1,2,"{51: 0.5900828838348389, 55: 0.6688975095748901}",0.6689,False
-cliff,55,cutout_camera1_0055_20250320_181553_mask_0.png,55,55,average,2,2,{55: 1.4568445086479187},1.4568,True
-cliff,56,cutout_camera1_0056_20250320_181602_mask_0.png,55,55,average,2,2,{55: 1.4987198114395142},1.4987,True
-cliff,57,cutout_camera1_0057_20250320_181621_mask_0.png,57,52,average,1,2,"{55: 0.6356269717216492, 52: 0.6947178840637207}",0.6947,False
-fish,95,cutout_camera1_0095_20250320_183254_mask_0.png,95,95,average,2,2,{95: 1.1073378920555115},1.1073,True
-fish,96,cutout_camera1_0096_20250320_183306_mask_0.png,96,95,average,2,2,{95: 1.0611092448234558},1.0611,False
-fish,97,cutout_camera1_0097_20250320_183316_mask_0.png,99,102,average,1,2,"{95: 0.5163320302963257, 102: 0.5745718479156494}",0.5746,False
-fish,98,cutout_camera1_0098_20250320_183328_mask_0.png,98,102,average,1,2,"{95: 0.5222083330154419, 102: 0.5529505014419556}",0.5530,False
-fish,99,cutout_camera1_0099_20250320_183349_mask_0.png,99,102,average,1,2,"{95: 0.5015479326248169, 102: 0.58225017786026}",0.5823,False
-fish,100,cutout_camera1_0100_20250320_183406_mask_0.png,99,102,average,1,2,"{95: 0.5126619338989258, 102: 0.5828721523284912}",0.5829,False
-fish,101,cutout_camera1_0101_20250320_183416_mask_0.png,99,102,average,1,2,"{95: 0.5140841007232666, 102: 0.5656296014785767}",0.5656,False
-fish,102,cutout_camera1_0102_20250320_183427_mask_0.png,102,102,average,1,2,"{95: 0.5101278424263, 102: 0.5720454454421997}",0.5720,True
-fish,103,cutout_camera1_0103_20250320_183454_mask_0.png,102,102,average,1,2,"{95: 0.5278595089912415, 102: 0.584411084651947}",0.5844,True
-fish,104,cutout_camera1_0104_20250320_183508_mask_0.png,104,98,average,1,2,"{95: 0.5043905973434448, 98: 0.5379323363304138}",0.5379,False
-fish,105,cutout_camera1_0105_20250320_183532_mask_0.png,104,95,average,1,2,"{95: 0.535916805267334, 98: 0.5332059860229492}",0.5359,False
-fish,106,cutout_camera1_0106_20250320_183600_mask_0.png,95,95,average,2,2,{95: 1.0435367226600647},1.0435,True
-fish,107,cutout_camera1_0107_20250320_183610_mask_0.png,95,95,average,2,2,{95: 1.0096448063850403},1.0096,True
+S,0,cutout_camera1_0000_20250320_174753_mask_0.png,1,1,vote,1,2,"{1: 1, 7: 1}",0.9057,True
+S,1,cutout_camera1_0001_20250320_174908_mask_0.png,1,1,vote,2,2,{1: 2},0.9170,True
+S,2,cutout_camera1_0002_20250320_175107_mask_0.png,2,2,vote,1,2,"{2: 1, 1: 1}",0.9047,True
+S,3,cutout_camera1_0003_20250320_175124_mask_0.png,2,2,vote,1,2,"{2: 1, 1: 1}",0.8712,True
+S,4,cutout_camera1_0004_20250320_175137_mask_0.png,2,2,vote,1,2,"{2: 1, 1: 1}",0.8842,True
+S,5,cutout_camera1_0005_20250320_175154_mask_0.png,5,5,vote,1,2,"{5: 1, 2: 1}",0.9080,True
+S,6,cutout_camera1_0006_20250320_175205_mask_0.png,6,6,vote,2,2,{6: 2},0.8964,True
+S,7,cutout_camera1_0007_20250320_175218_mask_0.png,7,7,vote,1,2,"{7: 1, 6: 1}",0.8998,True
+S,8,cutout_camera1_0008_20250320_175231_mask_0.png,8,8,vote,1,2,"{8: 1, 7: 1}",0.9064,True
+S,9,cutout_camera1_0009_20250320_175247_mask_0.png,7,7,vote,1,2,"{7: 1, 6: 1}",0.5619,True
+S,10,cutout_camera1_0010_20250320_175302_mask_0.png,0,0,vote,1,2,"{0: 1, 7: 1}",0.8924,True
+R,11,cutout_camera1_0011_20250320_175401_mask_0.png,11,11,vote,1,2,"{11: 1, 12: 1}",0.9401,True
+R,12,cutout_camera1_0012_20250320_175416_mask_0.png,12,12,vote,2,2,{12: 2},0.9390,True
+R,13,cutout_camera1_0013_20250320_175453_mask_0.png,13,13,vote,2,2,{13: 2},0.9134,True
+R,14,cutout_camera1_0014_20250320_175507_mask_0.png,13,13,vote,2,2,{13: 2},0.9160,True
+R,15,cutout_camera1_0015_20250320_175542_mask_0.png,13,13,vote,2,2,{13: 2},0.9081,True
+R,16,cutout_camera1_0016_20250320_175556_mask_0.png,13,13,vote,2,2,{13: 2},0.9155,True
+R,17,cutout_camera1_0017_20250320_175611_mask_0.png,17,17,vote,2,2,{17: 2},0.9262,True
+R,19,cutout_camera1_0019_20250320_175651_mask_0.png,18,18,vote,2,2,{18: 2},0.9218,True
+stairs_branched,20,cutout_camera1_0020_20250320_175905_mask_0.png,20,20,vote,2,2,{20: 2},0.9396,True
+stairs_branched,21,cutout_camera1_0021_20250320_175920_mask_0.png,24,27,vote,2,2,{27: 2},0.1051,False
+stairs_branched,22,cutout_camera1_0022_20250320_175929_mask_0.png,23,23,vote,2,2,{23: 2},0.9498,True
+stairs_branched,23,cutout_camera1_0023_20250320_175952_mask_0.png,23,23,vote,2,2,{23: 2},0.9100,True
+stairs_branched,24,cutout_camera1_0024_20250320_180012_mask_0.png,24,24,vote,1,2,"{27: 1, 24: 1}",0.8110,True
+stairs_branched,25,cutout_camera1_0025_20250320_180040_mask_0.png,24,24,vote,1,2,"{24: 1, 27: 1}",0.9227,True
+stairs_branched,26,cutout_camera1_0026_20250320_180051_mask_0.png,28,28,vote,2,2,{28: 2},0.9602,True
+stairs_branched,27,cutout_camera1_0027_20250320_180100_mask_0.png,27,27,vote,2,2,{27: 2},0.9635,True
+stairs_branched,28,cutout_camera1_0028_20250320_180109_mask_0.png,28,28,vote,1,2,"{27: 1, 28: 1}",0.8115,True
+stairs_branched,29,cutout_camera1_0029_20250320_180159_mask_0.png,29,20,vote,1,2,"{20: 1, 23: 1}",0.8371,False
+faucet,30,cutout_camera1_0030_20250320_180424_mask_0.png,30,43,vote,2,2,{43: 2},0.6443,False
+faucet,31,cutout_camera1_0031_20250320_180547_mask_0.png,31,43,vote,2,2,{43: 2},0.0531,False
+faucet,32,cutout_camera1_0032_20250320_180608_mask_0.png,31,43,vote,2,2,{43: 2},0.0516,False
+faucet,33,cutout_camera1_0033_20250320_180627_mask_0.png,33,43,vote,2,2,{43: 2},0.0515,False
+faucet,34,cutout_camera1_0034_20250320_180639_mask_0.png,34,43,vote,2,2,{43: 2},0.6486,False
+faucet,35,cutout_camera1_0035_20250320_180712_mask_0.png,35,43,vote,2,2,{43: 2},0.0520,False
+faucet,36,cutout_camera1_0036_20250320_180724_mask_0.png,35,43,vote,2,2,{43: 2},0.2785,False
+faucet,37,cutout_camera1_0037_20250320_180740_mask_0.png,35,43,vote,2,2,{43: 2},0.0535,False
+faucet,38,cutout_camera1_0038_20250320_180817_mask_0.png,38,43,vote,2,2,{43: 2},0.6491,False
+faucet,39,cutout_camera1_0039_20250320_180826_mask_0.png,39,43,vote,2,2,{43: 2},0.6505,False
+faucet,40,cutout_camera1_0040_20250320_180856_mask_0.png,40,43,vote,2,2,{43: 2},0.0518,False
+faucet,41,cutout_camera1_0041_20250320_180907_mask_0.png,41,43,vote,2,2,{43: 2},0.6486,False
+faucet,42,cutout_camera1_0042_20250320_180948_mask_0.png,42,43,vote,2,2,{43: 2},0.0515,False
+faucet,43,cutout_camera1_0043_20250320_181001_mask_0.png,43,43,vote,2,2,{43: 2},0.0518,True
+faucet,44,cutout_camera1_0044_20250320_181010_mask_0.png,44,43,vote,2,2,{43: 2},0.0534,False
+cliff,45,cutout_camera1_0045_20250320_181251_mask_0.png,45,45,vote,2,2,{45: 2},0.8843,True
+cliff,46,cutout_camera1_0046_20250320_181339_mask_0.png,46,46,vote,2,2,{46: 2},0.8759,True
+cliff,47,cutout_camera1_0047_20250320_181351_mask_0.png,49,49,vote,1,2,"{46: 1, 49: 1}",0.8251,True
+cliff,48,cutout_camera1_0048_20250320_181400_mask_0.png,49,51,vote,1,2,"{51: 1, 52: 1}",0.8530,False
+cliff,49,cutout_camera1_0049_20250320_181421_mask_0.png,49,49,vote,2,2,{49: 2},0.8556,True
+cliff,50,cutout_camera1_0050_20250320_181449_mask_0.png,49,49,vote,2,2,{49: 2},0.8412,True
+cliff,51,cutout_camera1_0051_20250320_181457_mask_0.png,51,51,vote,2,2,{51: 2},0.8734,True
+cliff,52,cutout_camera1_0052_20250320_181520_mask_0.png,52,52,vote,1,2,"{52: 1, 55: 1}",0.9692,True
+cliff,53,cutout_camera1_0053_20250320_181531_mask_0.png,52,52,vote,1,2,"{52: 1, 55: 1}",0.9680,True
+cliff,54,cutout_camera1_0054_20250320_181541_mask_0.png,52,52,vote,1,2,"{52: 1, 55: 1}",0.9688,True
+cliff,55,cutout_camera1_0055_20250320_181553_mask_0.png,55,55,vote,2,2,{55: 2},0.9596,True
+cliff,56,cutout_camera1_0056_20250320_181602_mask_0.png,55,55,vote,2,2,{55: 2},0.9678,True
+cliff,57,cutout_camera1_0057_20250320_181621_mask_0.png,57,55,vote,2,2,{55: 2},0.2501,False
+fish,95,cutout_camera1_0095_20250320_183254_mask_0.png,95,95,vote,2,2,{95: 2},0.8064,True
+fish,96,cutout_camera1_0096_20250320_183306_mask_0.png,96,96,vote,2,2,{96: 2},0.7987,True
+fish,97,cutout_camera1_0097_20250320_183316_mask_0.png,99,99,vote,1,2,"{99: 1, 102: 1}",0.8590,True
+fish,98,cutout_camera1_0098_20250320_183328_mask_0.png,98,98,vote,2,2,{98: 2},0.8246,True
+fish,99,cutout_camera1_0099_20250320_183349_mask_0.png,99,102,vote,2,2,{102: 2},0.8474,False
+fish,100,cutout_camera1_0100_20250320_183406_mask_0.png,99,99,vote,1,2,"{99: 1, 102: 1}",0.8648,True
+fish,101,cutout_camera1_0101_20250320_183416_mask_0.png,99,99,vote,1,2,"{99: 1, 102: 1}",0.8643,True
+fish,102,cutout_camera1_0102_20250320_183427_mask_0.png,102,102,vote,2,2,{102: 2},0.8510,True
+fish,103,cutout_camera1_0103_20250320_183454_mask_0.png,102,102,vote,2,2,{102: 2},0.8611,True
+fish,104,cutout_camera1_0104_20250320_183508_mask_0.png,104,104,vote,2,2,{104: 2},0.8441,True
+fish,105,cutout_camera1_0105_20250320_183532_mask_0.png,104,104,vote,2,2,{104: 2},0.8640,True
+fish,106,cutout_camera1_0106_20250320_183600_mask_0.png,95,96,vote,2,2,{96: 2},0.8707,False
+fish,107,cutout_camera1_0107_20250320_183610_mask_0.png,95,95,vote,2,2,{95: 2},0.8800,True

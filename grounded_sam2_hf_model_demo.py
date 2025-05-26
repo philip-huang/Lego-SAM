@@ -18,9 +18,10 @@ from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection
 Hyper parameters
 """
 parser = argparse.ArgumentParser()
-parser.add_argument('--grounding-model', default="IDEA-Research/grounding-dino-tiny")
+parser.add_argument('--grounding-model', default="IDEA-Research/grounding-dino-base")
 parser.add_argument("--text-prompt", default="car. tire.")
 parser.add_argument("--img-path", default="notebooks/images/truck.jpg")
+parser.add_argument("--img-folder", help="Path to folder with images")
 parser.add_argument("--sam2-checkpoint", default="./checkpoints/sam2.1_hiera_large.pt")
 parser.add_argument("--sam2-model-config", default="configs/sam2.1/sam2.1_hiera_l.yaml")
 parser.add_argument("--output-dir", default="outputs/test_sam2.1")
@@ -31,6 +32,7 @@ args = parser.parse_args()
 GROUNDING_MODEL = args.grounding_model
 TEXT_PROMPT = args.text_prompt
 IMG_PATH = args.img_path
+IMG_FOLDER = args.img_folder
 SAM2_CHECKPOINT = args.sam2_checkpoint
 SAM2_MODEL_CONFIG = args.sam2_model_config
 DEVICE = "cuda" if torch.cuda.is_available() and not args.force_cpu else "cpu"
@@ -64,124 +66,129 @@ grounding_model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id).
 # setup the input image and text prompt for SAM 2 and Grounding DINO
 # VERY important: text queries need to be lowercased + end with a dot
 text = TEXT_PROMPT
-img_path = IMG_PATH
-
-image = Image.open(img_path)
-
-sam2_predictor.set_image(np.array(image.convert("RGB")))
-
-inputs = processor(images=image, text=text, return_tensors="pt").to(DEVICE)
-with torch.no_grad():
-    outputs = grounding_model(**inputs)
-
-results = processor.post_process_grounded_object_detection(
-    outputs,
-    inputs.input_ids,
-    box_threshold=0.4,
-    text_threshold=0.3,
-    target_sizes=[image.size[::-1]]
-)
-
-"""
-Results is a list of dict with the following structure:
-[
-    {
-        'scores': tensor([0.7969, 0.6469, 0.6002, 0.4220], device='cuda:0'), 
-        'labels': ['car', 'tire', 'tire', 'tire'], 
-        'boxes': tensor([[  89.3244,  278.6940, 1710.3505,  851.5143],
-                        [1392.4701,  554.4064, 1628.6133,  777.5872],
-                        [ 436.1182,  621.8940,  676.5255,  851.6897],
-                        [1236.0990,  688.3547, 1400.2427,  753.1256]], device='cuda:0')
-    }
-]
-"""
-
-# get the box prompt for SAM 2
-input_boxes = results[0]["boxes"].cpu().numpy()
-
-masks, scores, logits = sam2_predictor.predict(
-    point_coords=None,
-    point_labels=None,
-    box=input_boxes,
-    multimask_output=False,
-)
-
-
-"""
-Post-process the output of the model to get the masks, scores, and logits for visualization
-"""
-# convert the shape to (n, H, W)
-if masks.ndim == 4:
-    masks = masks.squeeze(1)
-
-
-confidences = results[0]["scores"].cpu().numpy().tolist()
-class_names = results[0]["labels"]
-class_ids = np.array(list(range(len(class_names))))
-
-labels = [
-    f"{class_name} {confidence:.2f}"
-    for class_name, confidence
-    in zip(class_names, confidences)
-]
-
-"""
-Visualize image with supervision useful API
-"""
-img = cv2.imread(img_path)
-detections = sv.Detections(
-    xyxy=input_boxes,  # (n, 4)
-    mask=masks.astype(bool),  # (n, h, w)
-    class_id=class_ids
-)
-
-"""
-Note that if you want to use default color map,
-you can set color=ColorPalette.DEFAULT
-"""
-box_annotator = sv.BoxAnnotator(color=ColorPalette.from_hex(CUSTOM_COLOR_MAP))
-annotated_frame = box_annotator.annotate(scene=img.copy(), detections=detections)
-
-label_annotator = sv.LabelAnnotator(color=ColorPalette.from_hex(CUSTOM_COLOR_MAP))
-annotated_frame = label_annotator.annotate(scene=annotated_frame, detections=detections, labels=labels)
-cv2.imwrite(os.path.join(OUTPUT_DIR, "groundingdino_annotated_image.jpg"), annotated_frame)
-
-mask_annotator = sv.MaskAnnotator(color=ColorPalette.from_hex(CUSTOM_COLOR_MAP))
-annotated_frame = mask_annotator.annotate(scene=annotated_frame, detections=detections)
-cv2.imwrite(os.path.join(OUTPUT_DIR, "grounded_sam2_annotated_image_with_mask.jpg"), annotated_frame)
-
-
-"""
-Dump the results in standard format and save as json files
-"""
 
 def single_mask_to_rle(mask):
     rle = mask_util.encode(np.array(mask[:, :, None], order="F", dtype="uint8"))[0]
     rle["counts"] = rle["counts"].decode("utf-8")
     return rle
 
-if DUMP_JSON_RESULTS:
-    # convert mask into rle format
-    mask_rles = [single_mask_to_rle(mask) for mask in masks]
-
-    input_boxes = input_boxes.tolist()
-    scores = scores.tolist()
-    # save the results in standard format
-    results = {
-        "image_path": img_path,
-        "annotations" : [
-            {
-                "class_name": class_name,
-                "bbox": box,
-                "segmentation": mask_rle,
-                "score": score,
-            }
-            for class_name, box, mask_rle, score in zip(class_names, input_boxes, mask_rles, scores)
-        ],
-        "box_format": "xyxy",
-        "img_width": image.width,
-        "img_height": image.height,
-    }
+def process_image(img_path, out_img_name="image"):
+    print(f"Processing image: {img_path}")
     
-    with open(os.path.join(OUTPUT_DIR, "grounded_sam2_hf_model_demo_results.json"), "w") as f:
-        json.dump(results, f, indent=4)
+    # Create a subdirectory in the output dir for this specific image
+    img_name = Path(img_path).stem
+    img_output_dir = OUTPUT_DIR
+    img_output_dir.mkdir(exist_ok=True)
+    
+    image = Image.open(img_path)
+    sam2_predictor.set_image(np.array(image.convert("RGB")))
+
+    inputs = processor(images=image, text=text, return_tensors="pt").to(DEVICE)
+    with torch.no_grad():
+        outputs = grounding_model(**inputs)
+
+    results = processor.post_process_grounded_object_detection(
+        outputs,
+        inputs.input_ids,
+        box_threshold=0.4,
+        text_threshold=0.3,
+        target_sizes=[image.size[::-1]]
+    )
+
+    # Skip if no detections
+    if len(results[0]["boxes"]) == 0:
+        print(f"No objects detected in {img_path}")
+        return
+
+
+    # get the box prompt for SAM 2
+    input_boxes = results[0]["boxes"].cpu().numpy()
+
+    masks, scores, logits = sam2_predictor.predict(
+        point_coords=None,
+        point_labels=None,
+        box=input_boxes,
+        multimask_output=False,
+    )
+
+    # convert the shape to (n, H, W)
+    if masks.ndim == 4:
+        masks = masks.squeeze(1)
+
+    confidences = results[0]["scores"].cpu().numpy().tolist()
+    class_names = results[0]["labels"]
+    class_ids = np.array(list(range(len(class_names))))
+
+    labels = [
+        f"{class_name} {confidence:.2f}"
+        for class_name, confidence
+        in zip(class_names, confidences)
+    ]
+
+    # Visualize image with supervision useful API
+    img = cv2.imread(img_path)
+    detections = sv.Detections(
+        xyxy=input_boxes,  # (n, 4)
+        mask=masks.astype(bool),  # (n, h, w)
+        class_id=class_ids
+    )
+
+    box_annotator = sv.BoxAnnotator(color=ColorPalette.from_hex(CUSTOM_COLOR_MAP))
+    annotated_frame = box_annotator.annotate(scene=img.copy(), detections=detections)
+
+    label_annotator = sv.LabelAnnotator(color=ColorPalette.from_hex(CUSTOM_COLOR_MAP))
+    annotated_frame = label_annotator.annotate(scene=annotated_frame, detections=detections, labels=labels)
+    cv2.imwrite(os.path.join(img_output_dir, f"groundingdino_annotated_{out_img_name}.jpg"), annotated_frame)
+
+    mask_annotator = sv.MaskAnnotator(color=ColorPalette.from_hex(CUSTOM_COLOR_MAP))
+    annotated_frame = mask_annotator.annotate(scene=annotated_frame, detections=detections)
+    cv2.imwrite(os.path.join(img_output_dir, f"grounded_sam2_annotated_{out_img_name}.jpg"), annotated_frame)
+
+    if DUMP_JSON_RESULTS:
+        # convert mask into rle format
+        mask_rles = [single_mask_to_rle(mask) for mask in masks]
+
+        input_boxes_list = input_boxes.tolist()
+        scores_list = scores.tolist()
+        
+        # save the results in standard format
+        json_results = {
+            "image_path": img_path,
+            "annotations": [
+                {
+                    "class_name": class_name,
+                    "bbox": box,
+                    "segmentation": mask_rle,
+                    "score": score,
+                }
+                for class_name, box, mask_rle, score in zip(class_names, input_boxes_list, mask_rles, scores_list)
+            ],
+            "box_format": "xyxy",
+            "img_width": image.width,
+            "img_height": image.height,
+        }
+        
+        with open(os.path.join(img_output_dir, "results.json"), "w") as f:
+            json.dump(json_results, f, indent=4)
+
+# Process either a single image or all images in a folder
+if IMG_FOLDER:
+    # Get a list of supported image file extensions
+    supported_extensions = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif']
+    
+    # Process all images in the folder
+    img_folder_path = Path(IMG_FOLDER)
+    img_paths = [str(f) for f in sorted(img_folder_path.iterdir())
+                if f.is_file() and f.suffix.lower() in supported_extensions]
+    
+    if not img_paths:
+        print(f"No supported images found in folder: {IMG_FOLDER}")
+    else:
+        print(f"Found {len(img_paths)} images to process")
+        for img_path in img_paths:
+            process_image(img_path, out_img_name=Path(img_path).stem)
+        
+        print(f"All images processed. Results saved to {OUTPUT_DIR}")
+else:
+    # Process single image
+    process_image(IMG_PATH)
