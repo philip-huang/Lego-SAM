@@ -1,3 +1,6 @@
+"""
+old script for matching real images to simulator images based on class.json.
+"""
 import torch
 import cv2
 import os

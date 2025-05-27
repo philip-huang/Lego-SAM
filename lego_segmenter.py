@@ -1,3 +1,7 @@
+"""
+Python class for segmenting lego structures using Grounding DINO and SAM2.
+Works with static images or callable as API
+"""
 import argparse
 import os
 import cv2
@@ -409,6 +413,10 @@ def main():
     parser.add_argument("--dump-json", action="store_true", help="Save results in JSON format.")
     parser.add_argument("--force-cpu", action="store_true", help="Force use of CPU even if CUDA is available.")
     parser.add_argument("--top-k", type=int, default=1, help="Number of top detections to process from Grounding DINO.")
+
+    # Example argument
+    # python lego_segmenter.py --img-folder "sim_images/$task/cam1" --output-dir "outputs/sim_cam1/$task" --camera-name sim_cam1
+  
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() and not args.force_cpu else "cpu"

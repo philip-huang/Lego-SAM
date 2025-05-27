@@ -9,11 +9,11 @@ from cv_bridge import CvBridge
 from sensor_msgs.msg import CompressedImage
 from collections import deque
 
-BAG_PATH = "/home/mfi/repos/ros1_ws/src/philip/data/lego_R_2025-05-25-19-41-14.bag"  # path to your bag file
+BAG_PATH = "/home/mfi/repos/ros1_ws/src/philip/data/lego_R_2025-05-26-16-29-58.bag"  # path to your bag file
 TOPIC1 = "/cam_destroyer/color/image_raw/compressed"
 TOPIC2 = "/cam_architect/color/image_raw/compressed"
-OUTPUT_DIR1 = "outputs/cam1/R"
-OUTPUT_DIR2 = "outputs/cam2/R"
+OUTPUT_DIR1 = "outputs/cam1/R" # output directory for cam1
+OUTPUT_DIR2 = "outputs/cam2/R" 
 OUTPUT_FREQ = 0.5  # Hz (i.e. one image every 2 seconds)
 SYNC_TOLERANCE = rospy.Duration(0.05)  # seconds
 

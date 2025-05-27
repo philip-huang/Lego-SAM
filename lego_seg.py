@@ -1,3 +1,6 @@
+"""
+old script for SAM2.1 + Grounding DINO for lego segmentation
+"""
 import argparse
 import os
 import cv2

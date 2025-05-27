@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 
+"""
+ROS python node to connect to a rosbridge server, subscribe to two camera topics and do online inference using the geometric Lego state inferer.
+"""
 import asyncio
 import websockets
 import json

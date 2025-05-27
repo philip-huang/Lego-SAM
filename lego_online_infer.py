@@ -1,3 +1,6 @@
+"""
+Class for detecting Lego assembly state geometrically by comparing against a library of simulated images
+"""
 import os
 import glob
 import json
@@ -236,6 +239,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Run online Lego inference with dual cameras.")
     parser.add_argument("task", type=str, help="Task name for the assembly (e.g., 'cliff').")
+    
     args = parser.parse_args()
     assembly_key = args.task
 
