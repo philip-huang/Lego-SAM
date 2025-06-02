@@ -109,6 +109,9 @@ def calculate_mask_iou(img1, img2, threshold=10, display=False, transform=True):
         keypoints1, descriptors1 = orb.detectAndCompute(gray1, None)
         keypoints2, descriptors2 = orb.detectAndCompute(gray2, None)
 
+        if descriptors1 is None or descriptors2 is None:
+            return img2, None
+
         matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
         matches = matcher.match(descriptors1, descriptors2)
 
@@ -120,7 +123,7 @@ def calculate_mask_iou(img1, img2, threshold=10, display=False, transform=True):
         H, mask = cv2.findHomography(pts2, pts1, cv2.RANSAC)
 
         height, width = gray1.shape
-        aligned_img2 = cv2.warpPerspective(img2, H, (width, height), borderMode=cv2.BORDER_CONSTANT, borderValue=255)
+        aligned_img2 = cv2.warpPerspective(img2, H, (width, height), borderMode=cv2.BORDER_CONSTANT, borderValue=0)
 
         return aligned_img2, H
         
@@ -145,13 +148,15 @@ def calculate_mask_iou(img1, img2, threshold=10, display=False, transform=True):
         # intersection = np.logical_and(binary_mask1, binary_mask2).sum()
         # union = np.logical_or(binary_mask1, binary_mask2).sum()
 
+        img1, img2 = cv2.bitwise_not(img1), cv2.bitwise_not(img2)
 
         if transform: # default: align black and white images with homography transform
             img2_aligned, _ = align_images(img1, img2)
             img1_processed, img2_processed = img1, img2_aligned
+            img1_processed, img2_processed = crop_img_together(img1, img2_aligned)
         else:
-            img1_cropped = crop_img(cv2.bitwise_not(img1))
-            img2_cropped = crop_img(cv2.bitwise_not(img2))
+            img1_cropped = crop_img(img1)
+            img2_cropped = crop_img(img2)
             # pad the smaller image to match the size of the larger one
             max_height = max(img1_cropped.shape[0], img2_cropped.shape[0])
             max_width = max(img1_cropped.shape[1], img2_cropped.shape[1])
@@ -160,18 +165,14 @@ def calculate_mask_iou(img1, img2, threshold=10, display=False, transform=True):
             img1_processed, img2_processed = img1_padded, img2_padded
 
         if display:
-            if transform:
-                img1_display, img2_display = crop_img_together(cv2.bitwise_not(img1), cv2.bitwise_not(img2_aligned))
-            else:
-                img1_display, img2_display = img1_padded, img2_padded
             plt.subplot(1, 3, 1)
-            plt.imshow(img1_display, cmap="gray")
+            plt.imshow(img1_processed, cmap="gray", vmin=0, vmax=255)
             plt.axis('off')
             plt.subplot(1, 3, 2)
-            plt.imshow(img2_display, cmap="gray")
+            plt.imshow(img2_processed, cmap="gray", vmin=0, vmax=255)
             plt.axis('off')
             plt.subplot(1, 3, 3)
-            plt.imshow(img1_display/2+img2_display/2, cmap="gray")
+            plt.imshow(img1_processed/2+img2_processed/2, cmap="gray", vmin=0, vmax=255)
             plt.axis('off')
             plt.show()
         

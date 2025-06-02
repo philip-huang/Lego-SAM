@@ -154,6 +154,8 @@ class OnlineLegoInferer:
         if live_cutout_cam1_data is None and live_cutout_cam2_data is None:
             print(f"Error: Segmentation failed or no objects found for both cameras for assembly key '{assembly_key}'.")
             return None, None, None, -1.0, {}
+        assert(live_cutout_cam1_data.shape[2] == 4)
+        assert(live_cutout_cam2_data.shape[2] == 4)
 
         # Save the segmented cutouts to temporary files (image is rgb)
         live_cutout_cam1_path = self.temp_base_dir / f"live_cutout_{self.count:06d}_cam1.png"
@@ -188,15 +190,15 @@ class OnlineLegoInferer:
             if sim_mask_p1 is not None: # Ensure sim exist
                 # live_cutout_cam1_data can be None, _calculate_mask_iou handles it
                 # convert to grayscale for IoU calculation
-                live_cutout_cam1_data_gray = self._transparent_to_bw(live_cutout_cam1_data)
-                iou_cam1 = calculate_mask_iou(live_cutout_cam1_data_gray, sim_mask_p1, display=display, transform=transform)
+                live_cutout_cam1_data_bw = self._transparent_to_bw(live_cutout_cam1_data)
+                iou_cam1 = calculate_mask_iou(live_cutout_cam1_data_bw, sim_mask_p1, display=display, transform=transform)
 
             iou_cam2 = 0.0
             sim_mask_p2 = sim_masks_cam2_map.get(sim_id)
             if sim_mask_p2 is not None: # Ensure sim exist
                 # live_cutout_cam2_data can be None, _calculate_mask_iou handles it
-                live_cutout_cam2_data_gray = self._transparent_to_bw(live_cutout_cam2_data)
-                iou_cam2 = calculate_mask_iou(live_cutout_cam2_data_gray, sim_mask_p2, display=display, transform=transform)
+                live_cutout_cam2_data_bw = self._transparent_to_bw(live_cutout_cam2_data)
+                iou_cam2 = calculate_mask_iou(live_cutout_cam2_data_bw, sim_mask_p2, display=display, transform=transform)
             
             num_valid_ious = 0
             current_sum_iou = 0.0
@@ -226,7 +228,7 @@ class OnlineLegoInferer:
         return live_cutout_cam1_data, live_cutout_cam2_data, best_overall_sim_id, max_combined_iou, all_sim_id_results
     
     def _transparent_to_bw(self, img):
-        if img.shape[2] == 4:
+        if len(img.shape) == 3 and img.shape[2] == 4:
             alpha = img[:, :, 3]
         else:
             raise ValueError("Image has no alpha channel")
