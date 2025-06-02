@@ -14,6 +14,7 @@ import pandas as pd
 import numpy as np
 import torchvision.transforms
 from collections import Counter
+import matplotlib.pyplot as plt
 
 # --- Configuration ---
 DEFAULT_CLASS_JSON_PATH = "outputs/class.json"
@@ -78,7 +79,7 @@ def get_image_embedding(image_path, scale_shortest_edge): # Added scale_shortest
         print(f"Error processing image {image_path} for embedding at scale {scale_shortest_edge}: {e}")
         return None
 
-def calculate_mask_iou(img1, img2, threshold=10):
+def calculate_mask_iou(img1, img2, threshold=10, display=False, transform=True):
     """
     Calculates Intersection over Union (IoU) for two mask images.
     Images are resized to target_size x target_size maintaining aspect ratio and padding.
@@ -92,31 +93,98 @@ def calculate_mask_iou(img1, img2, threshold=10):
         x, y, w, h = cv2.boundingRect(coords)
         cropped_img = img[y:y+h, x:x+w]
         return cropped_img
+    
+    def crop_img_together(imgA, imgB):
+        # Crop the image by taking a bounding box over non-zero pixels
+        # Find all non-zero points
+        coords = cv2.findNonZero(cv2.bitwise_or(imgA, imgB))  # Returns a list of coordinates
+        # Get bounding box of non-zero pixels
+        x, y, w, h = cv2.boundingRect(coords)
+        cropped_imgA = imgA[y:y+h, x:x+w]
+        cropped_imgB = imgB[y:y+h, x:x+w]
+        return cropped_imgA, cropped_imgB
 
+    def align_images(gray1, gray2):
+        orb = cv2.ORB_create(5000)
+        keypoints1, descriptors1 = orb.detectAndCompute(gray1, None)
+        keypoints2, descriptors2 = orb.detectAndCompute(gray2, None)
+
+        matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+        matches = matcher.match(descriptors1, descriptors2)
+
+        matches = sorted(matches, key=lambda x: x.distance)
+
+        pts1 = np.float32([keypoints1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
+        pts2 = np.float32([keypoints2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
+
+        H, mask = cv2.findHomography(pts2, pts1, cv2.RANSAC)
+
+        height, width = gray1.shape
+        aligned_img2 = cv2.warpPerspective(img2, H, (width, height), borderMode=cv2.BORDER_CONSTANT, borderValue=255)
+
+        return aligned_img2, H
+        
     try:
-        img1_cropped = crop_img(img1)
-        img2_cropped = crop_img(img2)
-        # pad the smaller image to match the size of the larger one
-        max_height = max(img1_cropped.shape[0], img2_cropped.shape[0])
-        max_width = max(img1_cropped.shape[1], img2_cropped.shape[1])
-        img1_padded = cv2.copyMakeBorder(img1_cropped, 0, max_height - img1_cropped.shape[0], 0, max_width - img1_cropped.shape[1], cv2.BORDER_CONSTANT, value=0)
-        img2_padded = cv2.copyMakeBorder(img2_cropped, 0, max_height - img2_cropped.shape[0], 0, max_width - img2_cropped.shape[1], cv2.BORDER_CONSTANT, value=0)
+        # (old) thresholding requires grayscale images
 
-        mask1_np = np.array(img1_padded)
-        mask2_np = np.array(img2_padded)
+        # img1_cropped = crop_img(img1)
+        # img2_cropped = crop_img(img2)
+        # # pad the smaller image to match the size of the larger one
+        # max_height = max(img1_cropped.shape[0], img2_cropped.shape[0])
+        # max_width = max(img1_cropped.shape[1], img2_cropped.shape[1])
+        # img1_padded = cv2.copyMakeBorder(img1_cropped, 0, max_height - img1_cropped.shape[0], 0, max_width - img1_cropped.shape[1], cv2.BORDER_CONSTANT, value=0)
+        # img2_padded = cv2.copyMakeBorder(img2_cropped, 0, max_height - img2_cropped.shape[0], 0, max_width - img2_cropped.shape[1], cv2.BORDER_CONSTANT, value=0)
+
+        # mask1_np = np.array(img1_padded)
+        # mask2_np = np.array(img2_padded)
 
         # Binarize the masks (pixels > threshold are foreground)
-        binary_mask1 = (mask1_np > threshold) 
-        binary_mask2 = (mask2_np > threshold)
+        # binary_mask1 = (img1 >= threshold) 
+        # binary_mask2 = (img2 >= threshold) 
 
-        intersection = np.logical_and(binary_mask1, binary_mask2).sum()
-        union = np.logical_or(binary_mask1, binary_mask2).sum()
+        # intersection = np.logical_and(binary_mask1, binary_mask2).sum()
+        # union = np.logical_or(binary_mask1, binary_mask2).sum()
+
+
+        if transform: # default: align black and white images with homography transform
+            img2_aligned, _ = align_images(img1, img2)
+            img1_processed, img2_processed = img1, img2_aligned
+        else:
+            img1_cropped = crop_img(cv2.bitwise_not(img1))
+            img2_cropped = crop_img(cv2.bitwise_not(img2))
+            # pad the smaller image to match the size of the larger one
+            max_height = max(img1_cropped.shape[0], img2_cropped.shape[0])
+            max_width = max(img1_cropped.shape[1], img2_cropped.shape[1])
+            img1_padded = cv2.copyMakeBorder(img1_cropped, 0, max_height - img1_cropped.shape[0], 0, max_width - img1_cropped.shape[1], cv2.BORDER_CONSTANT, value=0)
+            img2_padded = cv2.copyMakeBorder(img2_cropped, 0, max_height - img2_cropped.shape[0], 0, max_width - img2_cropped.shape[1], cv2.BORDER_CONSTANT, value=0)
+            img1_processed, img2_processed = img1_padded, img2_padded
+
+        if display:
+            if transform:
+                img1_display, img2_display = crop_img_together(cv2.bitwise_not(img1), cv2.bitwise_not(img2_aligned))
+            else:
+                img1_display, img2_display = img1_padded, img2_padded
+            plt.subplot(1, 3, 1)
+            plt.imshow(img1_display, cmap="gray")
+            plt.axis('off')
+            plt.subplot(1, 3, 2)
+            plt.imshow(img2_display, cmap="gray")
+            plt.axis('off')
+            plt.subplot(1, 3, 3)
+            plt.imshow(img1_display/2+img2_display/2, cmap="gray")
+            plt.axis('off')
+            plt.show()
+        
+
+        intersection = np.logical_and(img1_processed, img2_processed).sum()
+        union = np.logical_or(img1_processed, img2_processed).sum()
 
         if union == 0:
             return 1.0 if intersection == 0 else 0.0 # Both masks empty (IoU=1), or issue (IoU=0)
         
         iou = float(intersection) / float(union)
         return iou
+    
     except Exception as e:
         print(f"Error processing images for IoU): {e}")
         return 0.0

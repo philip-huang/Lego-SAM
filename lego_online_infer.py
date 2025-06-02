@@ -74,7 +74,7 @@ class OnlineLegoInferer:
         self.sim_mask_info_cache = {} # Cache: {assembly_key: {sim_cam_name: {sim_id: path}}}
         self.count = 0
 
-    def _get_simulation_masks_for_key_and_cam(self, assembly_key: str, sim_camera_name: str) -> dict[int, str]:
+    def _get_simulation_masks_for_key_and_cam(self, assembly_key: str, sim_camera_name: str): # -> dict[int, str]:
         """
         Loads and caches paths to simulation masks for a given assembly_key and sim_camera_name.
         Returns a dictionary mapping sim_id (int) to mask_path (str).
@@ -98,7 +98,8 @@ class OnlineLegoInferer:
             for sim_path in sim_files_in_dir:
                 sim_id = extract_sim_id_from_filename(sim_path.name)
                 if sim_id is not None:
-                    sim_grayscale = cv2.imread(str(sim_path), cv2.IMREAD_GRAYSCALE)
+                    # sim_grayscale = cv2.imread(str(sim_path), cv2.IMREAD_GRAYSCALE)
+                    sim_grayscale = self._transparent_to_bw(cv2.imread(str(sim_path), cv2.IMREAD_UNCHANGED)) # alpha
                     mask_paths_with_ids[sim_id] = sim_grayscale
         
         if assembly_key not in self.sim_mask_info_cache:
@@ -106,7 +107,7 @@ class OnlineLegoInferer:
         self.sim_mask_info_cache[assembly_key][sim_camera_name] = mask_paths_with_ids
         return mask_paths_with_ids
 
-    def _segment_live_image(self, image_data_np: np.ndarray, camera_name: str) -> np.ndarray | None:
+    def _segment_live_image(self, image_data_np: np.ndarray, camera_name: str): # -> np.ndarray | None:
         """
         Segments a live image (NumPy array, RGB) using LegoSegmenter in-memory.
         Returns the primary cutout mask as a NumPy array (uint8, 0 or 255), or None.
@@ -124,8 +125,9 @@ class OnlineLegoInferer:
                           live_image_cam1_np: np.ndarray, # Expected RGB
                           live_image_cam2_np: np.ndarray, # Expected RGB
                           assembly_key: str,
-                          cur_assembling_step: int = -1
-                          ) -> tuple[int | None, float, dict]:
+                          cur_assembling_step: int = -1,
+                          display=False,
+                          transform=True): # -> tuple[int | None, float, dict]:
         """
         Performs inference using two live camera images against simulation masks.
 
@@ -156,8 +158,8 @@ class OnlineLegoInferer:
         # Save the segmented cutouts to temporary files (image is rgb)
         live_cutout_cam1_path = self.temp_base_dir / f"live_cutout_{self.count:06d}_cam1.png"
         live_cutout_cam2_path = self.temp_base_dir / f"live_cutout_{self.count:06d}_cam2.png"
-        bgr_cutout_cam1_data = cv2.cvtColor(live_cutout_cam1_data, cv2.COLOR_RGB2BGR)
-        bgr_cutout_cam2_data = cv2.cvtColor(live_cutout_cam2_data, cv2.COLOR_RGB2BGR)
+        bgr_cutout_cam1_data = cv2.cvtColor(live_cutout_cam1_data, cv2.COLOR_RGBA2BGRA)
+        bgr_cutout_cam2_data = cv2.cvtColor(live_cutout_cam2_data, cv2.COLOR_RGBA2BGRA)
         cv2.imwrite(str(live_cutout_cam2_path), bgr_cutout_cam2_data)
         cv2.imwrite(str(live_cutout_cam1_path), bgr_cutout_cam1_data)
 
@@ -186,15 +188,15 @@ class OnlineLegoInferer:
             if sim_mask_p1 is not None: # Ensure sim exist
                 # live_cutout_cam1_data can be None, _calculate_mask_iou handles it
                 # convert to grayscale for IoU calculation
-                live_cutout_cam1_data_gray = cv2.cvtColor(live_cutout_cam1_data, cv2.COLOR_RGB2GRAY)
-                iou_cam1 = calculate_mask_iou(live_cutout_cam1_data_gray, sim_mask_p1)
+                live_cutout_cam1_data_gray = self._transparent_to_bw(live_cutout_cam1_data)
+                iou_cam1 = calculate_mask_iou(live_cutout_cam1_data_gray, sim_mask_p1, display=display, transform=transform)
 
             iou_cam2 = 0.0
             sim_mask_p2 = sim_masks_cam2_map.get(sim_id)
             if sim_mask_p2 is not None: # Ensure sim exist
                 # live_cutout_cam2_data can be None, _calculate_mask_iou handles it
-                live_cutout_cam2_data_gray = cv2.cvtColor(live_cutout_cam2_data, cv2.COLOR_RGB2GRAY)
-                iou_cam2 = calculate_mask_iou(live_cutout_cam2_data_gray, sim_mask_p2)
+                live_cutout_cam2_data_gray = self._transparent_to_bw(live_cutout_cam2_data)
+                iou_cam2 = calculate_mask_iou(live_cutout_cam2_data_gray, sim_mask_p2, display=display, transform=transform)
             
             num_valid_ious = 0
             current_sum_iou = 0.0
@@ -222,6 +224,17 @@ class OnlineLegoInferer:
                 best_overall_sim_id = sim_id
 
         return live_cutout_cam1_data, live_cutout_cam2_data, best_overall_sim_id, max_combined_iou, all_sim_id_results
+    
+    def _transparent_to_bw(self, img):
+        if img.shape[2] == 4:
+            alpha = img[:, :, 3]
+        else:
+            raise ValueError("Image has no alpha channel")
+
+        output = np.ones((img.shape[0], img.shape[1]), dtype=np.uint8) * 255
+        output[alpha > 0] = 0
+
+        return output
 
     def cleanup_all_temp_dirs(self):
         """Cleans up the base temporary directory used by this instance."""

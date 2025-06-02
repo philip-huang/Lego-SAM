@@ -225,7 +225,7 @@ class LegoSegmenter:
         mask[0][red_mask == 0] = 0
         return mask
 
-    def generate_single_mask_from_data(self, image_data_np: np.ndarray, text_prompt: str = None, save_id: int = None) -> np.ndarray | None:
+    def generate_single_mask_from_data(self, image_data_np: np.ndarray, text_prompt: str = None, save_id: int = None): # -> np.ndarray | None:
         """
         Processes image data (NumPy array) in memory to get a single segmentation mask.
         Returns a 2D NumPy array (uint8, 0 or 255) for the mask, or None.
