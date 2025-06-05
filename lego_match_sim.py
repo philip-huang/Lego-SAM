@@ -16,6 +16,8 @@ import torchvision.transforms
 from collections import Counter
 import matplotlib.pyplot as plt
 
+import numpy as np
+
 # --- Configuration ---
 DEFAULT_CLASS_JSON_PATH = "outputs/class.json"
 DEFAULT_BASE_OUTPUT_DIR = "outputs"
@@ -79,10 +81,213 @@ def get_image_embedding(image_path, scale_shortest_edge): # Added scale_shortest
         print(f"Error processing image {image_path} for embedding at scale {scale_shortest_edge}: {e}")
         return None
 
-def calculate_mask_iou(img1, img2, threshold=10, display=False, transform=True):
+
+# ORB feature detection and RANSAC for transformation estimation (scale and translation only)
+def align_images_scale_translation(img1, img2, display=False): 
+
+    def estimate_scale_translation(p1, p2):
+        # Estimate scale and translation from 2 corresponding points
+        dp1 = p1[1] - p1[0]
+        dp2 = p2[1] - p2[0]
+        scale = np.linalg.norm(dp2) / np.linalg.norm(dp1)
+        t = p2[0] - scale * p1[0]
+        return scale, t
+
+    def apply_transform(points, scale, t):
+        return scale * points + t
+
+    def ransac_scale_translation(src_pts, dst_pts, threshold=3.0, scale_lower=0.9, scale_upper=1.1, max_iters=1000):
+        np.random.seed(0)
+        best_inliers = []
+        best_model = None
+
+        n = len(src_pts)
+        src_pts = np.asarray(src_pts)
+        dst_pts = np.asarray(dst_pts)
+
+        threshold_sq = threshold ** 2
+
+        for _ in range(max_iters):
+            idx = np.random.choice(n, 2, replace=False)
+            s_try, t_try = estimate_scale_translation(src_pts[idx], dst_pts[idx])
+            
+            if not (scale_lower <= s_try <= scale_upper): # reject
+                continue
+
+            transformed = apply_transform(src_pts, s_try, t_try)
+
+            dists_sq = np.sum((transformed - dst_pts) ** 2, axis=1)
+            inliers = np.where(dists_sq < threshold_sq)[0]
+
+            if len(inliers) > len(best_inliers):
+                best_inliers = inliers
+                best_model = (s_try, t_try)
+
+        if best_model is None:
+            return None, []
+
+        inlier_src = src_pts[best_inliers]
+        inlier_dst = dst_pts[best_inliers]
+
+        return refine_scale_translation(inlier_src, inlier_dst), best_inliers
+
+    def refine_scale_translation(src_pts, dst_pts):
+        # Least squares solution using all inliers
+        src_mean = src_pts.mean(axis=0)
+        dst_mean = dst_pts.mean(axis=0)
+
+        src_centered = src_pts - src_mean
+        dst_centered = dst_pts - dst_mean
+
+        if np.sum(src_centered ** 2) == 0:
+            return None
+        
+        scale = np.sum(dst_centered * src_centered) / np.sum(src_centered ** 2)
+        
+        translation = dst_mean - scale * src_mean
+
+    
+        return scale, translation
+
+    orb = cv2.ORB_create()
+    kp1, des1 = orb.detectAndCompute(img1, None)
+    kp2, des2 = orb.detectAndCompute(img2, None)
+
+    if des1 is None or des2 is None:
+        return img1, None
+
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING)
+    matches = bf.match(des1, des2)
+
+    src_pts = np.float32([kp1[m.queryIdx].pt for m in matches])
+    dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches])
+
+    transform, inliers = ransac_scale_translation(src_pts, dst_pts)
+
+    if transform:
+        s, t = transform
+    else:
+        return img1, None
+
+    T = np.array([
+        [s, 0, t[0]],
+        [0, s, t[1]],
+        [0, 0, 1]
+    ])
+    
+    height, width = img1.shape
+    aligned_img1 = cv2.warpPerspective(img1, T, (width, height), borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+
+    if display:
+        print(s, t)
+        inlier_matches = [matches[i] for i in inliers]
+        img_matches = cv2.drawMatches(img1, kp1, img2, kp2, inlier_matches, None,
+                                    matchColor=(0, 255, 0), flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
+        plt.imshow(img_matches)
+        plt.axis('off')
+        plt.show()
+
+    return aligned_img1, T
+
+
+# ORB feature detection and RANSAC for transformation estimation (translation only)
+def align_images_translation(img1, img2, scale=1, display=False): 
+
+    def estimate_translation(p1, p2):
+        t = p2[0] - scale * p1[0]
+        return t
+
+    def ransac_translation(src_pts, dst_pts, threshold=3.0, max_iters=1000):
+        # np.random.seed(0)
+        best_inliers = []
+        best_model = None
+
+        n = len(src_pts)
+        src_pts = np.asarray(src_pts)
+        dst_pts = np.asarray(dst_pts)
+
+        threshold_sq = threshold ** 2
+        scaled_src_pts = scale * src_pts
+
+        for _ in range(max_iters):
+            idx = np.random.choice(n, 2, replace=False)
+            t_try = estimate_translation(src_pts[idx], dst_pts[idx])
+
+            transformed = scaled_src_pts + t_try
+
+            dists_sq = np.sum((transformed - dst_pts) ** 2, axis=1)
+            inliers = np.where(dists_sq < threshold_sq)[0]
+
+            if len(inliers) > len(best_inliers):
+                best_inliers = inliers
+                best_model = t_try
+
+        if best_model is None:
+            return None, []
+
+        inlier_src = src_pts[best_inliers]
+        inlier_dst = dst_pts[best_inliers]
+
+        return refine_translation(inlier_src, inlier_dst), best_inliers
+
+    def refine_translation(src_pts, dst_pts):
+        """Least squares solution using all inliers."""
+        src_mean = src_pts.mean(axis=0)
+        dst_mean = dst_pts.mean(axis=0)
+        
+        translation = dst_mean - scale * src_mean
+    
+        return scale, translation
+
+    orb = cv2.ORB_create()
+    kp1, des1 = orb.detectAndCompute(img1, None)
+    kp2, des2 = orb.detectAndCompute(img2, None)
+
+    if des1 is None or des2 is None:
+        return img1, None
+
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING)
+    matches = bf.match(des1, des2)
+
+    src_pts = np.float32([kp1[m.queryIdx].pt for m in matches])
+    dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches])
+
+    transform, inliers = ransac_translation(src_pts, dst_pts)
+
+    if transform:
+        s, t = transform
+    else:
+        return img1, None
+
+    T = np.array([
+        [s, 0, t[0]],
+        [0, s, t[1]],
+        [0, 0, 1]
+    ])
+    
+    height, width = img1.shape
+    aligned_img1 = cv2.warpPerspective(img1, T, (width, height), borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+
+    if display:
+        print(s, t)
+        inlier_matches = [matches[i] for i in inliers]
+        img_matches = cv2.drawMatches(img1, kp1, img2, kp2, inlier_matches, None,
+                                    matchColor=(0, 255, 0), flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
+        plt.imshow(img_matches)
+        plt.axis('off')
+        plt.show()
+
+    return aligned_img1, T
+    
+    
+def calculate_mask_iou(img1, img2, display=False, transform=True, scale=-1):
     """
     Calculates Intersection over Union (IoU) for two mask images.
     Images are resized to target_size x target_size maintaining aspect ratio and padding.
+
+    display: show images
+    transform: detect and match features to align images
+    scale: scale image before aligning, or set to -1 to find best scale (limited to 0.9 to 1.1)
     """
 
     def crop_img(img):
@@ -103,30 +308,28 @@ def calculate_mask_iou(img1, img2, threshold=10, display=False, transform=True):
         cropped_imgA = imgA[y:y+h, x:x+w]
         cropped_imgB = imgB[y:y+h, x:x+w]
         return cropped_imgA, cropped_imgB
+    
+    def transparent_to_bw(img):
+        if len(img.shape) == 3 and img.shape[2] == 4:
+            alpha = img[:, :, 3]
 
-    def align_images(gray1, gray2):
-        orb = cv2.ORB_create(5000)
-        keypoints1, descriptors1 = orb.detectAndCompute(gray1, None)
-        keypoints2, descriptors2 = orb.detectAndCompute(gray2, None)
+        output = np.zeros((img.shape[0], img.shape[1]), dtype=np.uint8) 
+        output[alpha > 0] = 255
 
-        if descriptors1 is None or descriptors2 is None:
-            return img2, None
+        return output
 
-        matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-        matches = matcher.match(descriptors1, descriptors2)
-
-        matches = sorted(matches, key=lambda x: x.distance)
-
-        pts1 = np.float32([keypoints1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
-        pts2 = np.float32([keypoints2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
-
-        H, mask = cv2.findHomography(pts2, pts1, cv2.RANSAC)
-
-        height, width = gray1.shape
-        aligned_img2 = cv2.warpPerspective(img2, H, (width, height), borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-
-        return aligned_img2, H
-        
+    def display_overlayed(img1, img2):
+        plt.subplot(1, 3, 1)
+        plt.imshow(img1, cmap="gray", vmin=0, vmax=255)
+        plt.axis('off')
+        plt.subplot(1, 3, 2)
+        plt.imshow(img2, cmap="gray", vmin=0, vmax=255)
+        plt.axis('off')
+        plt.subplot(1, 3, 3)
+        plt.imshow(img1/2+img2/2, cmap="gray", vmin=0, vmax=255)
+        plt.axis('off')
+        plt.show()     
+    
     try:
         # (old) thresholding requires grayscale images
 
@@ -147,35 +350,31 @@ def calculate_mask_iou(img1, img2, threshold=10, display=False, transform=True):
 
         # intersection = np.logical_and(binary_mask1, binary_mask2).sum()
         # union = np.logical_or(binary_mask1, binary_mask2).sum()
-
-        img1, img2 = cv2.bitwise_not(img1), cv2.bitwise_not(img2)
+        
+        img1 = transparent_to_bw(img1)
+        img2 = transparent_to_bw(img2)
 
         if transform: # default: align black and white images with homography transform
-            img2_aligned, _ = align_images(img1, img2)
-            img1_processed, img2_processed = img1, img2_aligned
-            img1_processed, img2_processed = crop_img_together(img1, img2_aligned)
+            if scale == -1:
+                img1_aligned, _ = align_images_scale_translation(img1, img2, display=display)
+            else:
+                img1_aligned, _ = align_images_translation(img1, img2, scale=scale, display=display)
+            img1_processed, img2_processed = crop_img_together(img1_aligned, img2)
         else:
+            if scale > 0 and scale != 1:
+                h, w = img1.shape
+                img1 = cv2.resize(img1, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_NEAREST)
+                
             img1_cropped = crop_img(img1)
             img2_cropped = crop_img(img2)
             # pad the smaller image to match the size of the larger one
             max_height = max(img1_cropped.shape[0], img2_cropped.shape[0])
             max_width = max(img1_cropped.shape[1], img2_cropped.shape[1])
-            img1_padded = cv2.copyMakeBorder(img1_cropped, 0, max_height - img1_cropped.shape[0], 0, max_width - img1_cropped.shape[1], cv2.BORDER_CONSTANT, value=0)
-            img2_padded = cv2.copyMakeBorder(img2_cropped, 0, max_height - img2_cropped.shape[0], 0, max_width - img2_cropped.shape[1], cv2.BORDER_CONSTANT, value=0)
-            img1_processed, img2_processed = img1_padded, img2_padded
+            img1_processed = cv2.copyMakeBorder(img1_cropped, 0, max_height - img1_cropped.shape[0], 0, max_width - img1_cropped.shape[1], cv2.BORDER_CONSTANT, value=0)
+            img2_processed = cv2.copyMakeBorder(img2_cropped, 0, max_height - img2_cropped.shape[0], 0, max_width - img2_cropped.shape[1], cv2.BORDER_CONSTANT, value=0)
 
         if display:
-            plt.subplot(1, 3, 1)
-            plt.imshow(img1_processed, cmap="gray", vmin=0, vmax=255)
-            plt.axis('off')
-            plt.subplot(1, 3, 2)
-            plt.imshow(img2_processed, cmap="gray", vmin=0, vmax=255)
-            plt.axis('off')
-            plt.subplot(1, 3, 3)
-            plt.imshow(img1_processed/2+img2_processed/2, cmap="gray", vmin=0, vmax=255)
-            plt.axis('off')
-            plt.show()
-        
+            display_overlayed(img1_processed, img2_processed)
 
         intersection = np.logical_and(img1_processed, img2_processed).sum()
         union = np.logical_or(img1_processed, img2_processed).sum()

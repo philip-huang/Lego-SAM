@@ -99,7 +99,7 @@ class OnlineLegoInferer:
                 sim_id = extract_sim_id_from_filename(sim_path.name)
                 if sim_id is not None:
                     # sim_grayscale = cv2.imread(str(sim_path), cv2.IMREAD_GRAYSCALE)
-                    sim_grayscale = self._transparent_to_bw(cv2.imread(str(sim_path), cv2.IMREAD_UNCHANGED)) # alpha
+                    sim_grayscale = cv2.imread(str(sim_path), cv2.IMREAD_UNCHANGED)
                     mask_paths_with_ids[sim_id] = sim_grayscale
         
         if assembly_key not in self.sim_mask_info_cache:
@@ -127,7 +127,9 @@ class OnlineLegoInferer:
                           assembly_key: str,
                           cur_assembling_step: int = -1,
                           display=False,
-                          transform=True): # -> tuple[int | None, float, dict]:
+                          transform=True,
+                          scale=-1,
+                          save=True): # -> tuple[int | None, float, dict]:
         """
         Performs inference using two live camera images against simulation masks.
 
@@ -135,6 +137,10 @@ class OnlineLegoInferer:
             live_image_cam1_np: NumPy array for camera 1 image (RGB).
             live_image_cam2_np: NumPy array for camera 2 image (RGB).
             assembly_key: The key for the current assembly stage (e.g., "S").
+
+            display: show images
+            transform: detect and match features to align images
+            scale: scale image before aligning, or set to -1 to find best scale (limited to 0.9 to 1.1)
 
         Returns:
             Tuple: (best_overall_sim_id, max_combined_iou_score, per_sim_id_details)
@@ -151,20 +157,22 @@ class OnlineLegoInferer:
         live_cutout_cam1_data = self._segment_live_image(live_image_cam1_np, "cam1")
         live_cutout_cam2_data = self._segment_live_image(live_image_cam2_np, "cam2")        
 
-        if live_cutout_cam1_data is None and live_cutout_cam2_data is None:
+        if live_cutout_cam1_data is None or live_cutout_cam2_data is None:
             print(f"Error: Segmentation failed or no objects found for both cameras for assembly key '{assembly_key}'.")
             return None, None, None, -1.0, {}
-        assert(live_cutout_cam1_data.shape[2] == 4)
-        assert(live_cutout_cam2_data.shape[2] == 4)
+        assert((live_cutout_cam1_data is not None and live_cutout_cam1_data.shape[2] == 4) 
+               or (live_cutout_cam2_data is not None and live_cutout_cam2_data.shape[2] == 4))
 
         # Save the segmented cutouts to temporary files (image is rgb)
-        live_cutout_cam1_path = self.temp_base_dir / f"live_cutout_{self.count:06d}_cam1.png"
-        live_cutout_cam2_path = self.temp_base_dir / f"live_cutout_{self.count:06d}_cam2.png"
-        bgr_cutout_cam1_data = cv2.cvtColor(live_cutout_cam1_data, cv2.COLOR_RGBA2BGRA)
-        bgr_cutout_cam2_data = cv2.cvtColor(live_cutout_cam2_data, cv2.COLOR_RGBA2BGRA)
-        cv2.imwrite(str(live_cutout_cam2_path), bgr_cutout_cam2_data)
-        cv2.imwrite(str(live_cutout_cam1_path), bgr_cutout_cam1_data)
-
+        if save:
+            if live_cutout_cam1_data is not None:
+                live_cutout_cam1_path = self.temp_base_dir / f"live_cutout_{self.count:06d}_cam1.png"
+                bgr_cutout_cam1_data = cv2.cvtColor(live_cutout_cam1_data, cv2.COLOR_RGBA2BGRA)
+                cv2.imwrite(str(live_cutout_cam1_path), bgr_cutout_cam1_data)
+            if live_cutout_cam2_data is not None:
+                live_cutout_cam2_path = self.temp_base_dir / f"live_cutout_{self.count:06d}_cam2.png"
+                bgr_cutout_cam2_data = cv2.cvtColor(live_cutout_cam2_data, cv2.COLOR_RGBA2BGRA)
+                cv2.imwrite(str(live_cutout_cam2_path), bgr_cutout_cam2_data)
         sim_masks_cam1_map = self._get_simulation_masks_for_key_and_cam(assembly_key, "sim_cam1")
         sim_masks_cam2_map = self._get_simulation_masks_for_key_and_cam(assembly_key, "sim_cam2")
 
@@ -182,32 +190,32 @@ class OnlineLegoInferer:
         all_sim_id_results = {}
 
         for sim_id in unique_sim_ids:
+            if display:
+                print(f"{assembly_key}: comparing to sim_id {sim_id}")
+
             if cur_assembling_step > -1 and sim_id >= cur_assembling_step:
                 # Skip sim_ids that are beyond the current assembly step
                 continue
+
+            num_valid_ious = 0
+            current_sum_iou = 0.0
+            # A "valid" IoU for averaging means a comparison was attempted and yielded a score.
+            # If a live mask is None, its IoU is 0. We count it if a sim mask existed for that view.
+
             iou_cam1 = 0.0
             sim_mask_p1 = sim_masks_cam1_map.get(sim_id)
             if sim_mask_p1 is not None: # Ensure sim exist
                 # live_cutout_cam1_data can be None, _calculate_mask_iou handles it
                 # convert to grayscale for IoU calculation
-                live_cutout_cam1_data_bw = self._transparent_to_bw(live_cutout_cam1_data)
-                iou_cam1 = calculate_mask_iou(live_cutout_cam1_data_bw, sim_mask_p1, display=display, transform=transform)
+                iou_cam1 = calculate_mask_iou(live_cutout_cam1_data, sim_mask_p1, display=display, transform=transform, scale=scale)
+                num_valid_ious += 1
+                current_sum_iou += iou_cam1
 
             iou_cam2 = 0.0
             sim_mask_p2 = sim_masks_cam2_map.get(sim_id)
-            if sim_mask_p2 is not None: # Ensure sim exist
+            if sim_mask_p2 is not None and live_cutout_cam1_data is not None: # Ensure sim exist
                 # live_cutout_cam2_data can be None, _calculate_mask_iou handles it
-                live_cutout_cam2_data_bw = self._transparent_to_bw(live_cutout_cam2_data)
-                iou_cam2 = calculate_mask_iou(live_cutout_cam2_data_bw, sim_mask_p2, display=display, transform=transform)
-            
-            num_valid_ious = 0
-            current_sum_iou = 0.0
-            # A "valid" IoU for averaging means a comparison was attempted and yielded a score.
-            # If a live mask is None, its IoU is 0. We count it if a sim mask existed for that view.
-            if sim_mask_p1 is not None: 
-                num_valid_ious += 1
-                current_sum_iou += iou_cam1
-            if sim_mask_p2 is not None:
+                iou_cam2 = calculate_mask_iou(live_cutout_cam2_data, sim_mask_p2, display=display, transform=transform, scale=scale)
                 num_valid_ious += 1
                 current_sum_iou += iou_cam2
             
@@ -226,17 +234,6 @@ class OnlineLegoInferer:
                 best_overall_sim_id = sim_id
 
         return live_cutout_cam1_data, live_cutout_cam2_data, best_overall_sim_id, max_combined_iou, all_sim_id_results
-    
-    def _transparent_to_bw(self, img):
-        if len(img.shape) == 3 and img.shape[2] == 4:
-            alpha = img[:, :, 3]
-        else:
-            raise ValueError("Image has no alpha channel")
-
-        output = np.ones((img.shape[0], img.shape[1]), dtype=np.uint8) * 255
-        output[alpha > 0] = 0
-
-        return output
 
     def cleanup_all_temp_dirs(self):
         """Cleans up the base temporary directory used by this instance."""

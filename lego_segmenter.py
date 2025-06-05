@@ -416,6 +416,7 @@ def main():
 
     # Example argument
     # python lego_segmenter.py --img-folder "sim_images/$task/cam1" --output-dir "outputs/sim_cam1/$task" --camera-name sim_cam1
+    # python lego_segmenter.py --img-folder "outputs/cam1/$task" --output-dir "outputs/cam1/$task" --camera-name cam1
   
     args = parser.parse_args()
 
