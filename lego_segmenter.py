@@ -415,8 +415,17 @@ def main():
     parser.add_argument("--top-k", type=int, default=1, help="Number of top detections to process from Grounding DINO.")
 
     # Example argument
+
+    # old calibration
     # python lego_segmenter.py --img-folder "sim_images/$task/cam1" --output-dir "outputs/sim_cam1/$task" --camera-name sim_cam1
+    # python lego_segmenter.py --img-folder "sim_images/$task/cam2" --output-dir "outputs/sim_cam2/$task" --camera-name sim_cam2
+    
     # python lego_segmenter.py --img-folder "outputs/cam1/$task" --output-dir "outputs/cam1/$task" --camera-name cam1
+
+    # new calibration
+    # python lego_segmenter.py --img-folder "sim_images2/$task/cam1" --output-dir "outputs2/sim_cam1/$task" --camera-name sim_cam1
+    # python lego_segmenter.py --img-folder "sim_images2/$task/cam2" --output-dir "outputs2/sim_cam2/$task" --camera-name sim_cam2
+    
   
     args = parser.parse_args()
 
