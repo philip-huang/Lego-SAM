@@ -83,9 +83,8 @@ def get_image_embedding(image_path, scale_shortest_edge): # Added scale_shortest
 
 
 # ORB feature detection and RANSAC for transformation estimation (scale and translation only)
-def align_images_scale_translation(img1, img2, display=False): 
-
-    def estimate_scale_translation(p1, p2):
+def scale_translation_ransac(src_points, dst_points):
+    def estimate(p1, p2):
         # Estimate scale and translation from 2 corresponding points
         dp1 = p1[1] - p1[0]
         dp2 = p2[1] - p2[0]
@@ -96,7 +95,7 @@ def align_images_scale_translation(img1, img2, display=False):
     def apply_transform(points, scale, t):
         return scale * points + t
 
-    def ransac_scale_translation(src_pts, dst_pts, threshold=3.0, scale_lower=0.9, scale_upper=1.1, max_iters=1000):
+    def ransac(src_pts, dst_pts, threshold=3.0, scale_lower=0.9, scale_upper=1.1, max_iters=500):
         np.random.seed(0)
         best_inliers = []
         best_model = None
@@ -109,7 +108,7 @@ def align_images_scale_translation(img1, img2, display=False):
 
         for _ in range(max_iters):
             idx = np.random.choice(n, 2, replace=False)
-            s_try, t_try = estimate_scale_translation(src_pts[idx], dst_pts[idx])
+            s_try, t_try = estimate(src_pts[idx], dst_pts[idx])
             
             if not (scale_lower <= s_try <= scale_upper): # reject
                 continue
@@ -129,9 +128,9 @@ def align_images_scale_translation(img1, img2, display=False):
         inlier_src = src_pts[best_inliers]
         inlier_dst = dst_pts[best_inliers]
 
-        return refine_scale_translation(inlier_src, inlier_dst), best_inliers
+        return refine(inlier_src, inlier_dst), best_inliers
 
-    def refine_scale_translation(src_pts, dst_pts):
+    def refine(src_pts, dst_pts):
         # Least squares solution using all inliers
         src_mean = src_pts.mean(axis=0)
         dst_mean = dst_pts.mean(axis=0)
@@ -145,59 +144,22 @@ def align_images_scale_translation(img1, img2, display=False):
         scale = np.sum(dst_centered * src_centered) / np.sum(src_centered ** 2)
         
         translation = dst_mean - scale * src_mean
-
     
         return scale, translation
 
-    orb = cv2.ORB_create()
-    kp1, des1 = orb.detectAndCompute(img1, None)
-    kp2, des2 = orb.detectAndCompute(img2, None)
-
-    if des1 is None or des2 is None:
-        return img1, None
-
-    bf = cv2.BFMatcher(cv2.NORM_HAMMING)
-    matches = bf.match(des1, des2)
-
-    src_pts = np.float32([kp1[m.queryIdx].pt for m in matches])
-    dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches])
-
-    transform, inliers = ransac_scale_translation(src_pts, dst_pts)
-
-    if transform:
-        s, t = transform
-    else:
-        return img1, None
-
-    T = np.array([
-        [s, 0, t[0]],
-        [0, s, t[1]],
-        [0, 0, 1]
-    ])
-    
-    height, width = img1.shape
-    aligned_img1 = cv2.warpPerspective(img1, T, (width, height), borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-
-    if display:
-        print(s, t)
-        inlier_matches = [matches[i] for i in inliers]
-        img_matches = cv2.drawMatches(img1, kp1, img2, kp2, inlier_matches, None,
-                                    matchColor=(0, 255, 0), flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
-        plt.imshow(img_matches)
-        plt.axis('off')
-        plt.show()
-
-    return aligned_img1, T
+    return ransac(src_points, dst_points)
 
 
 # ORB feature detection and RANSAC for transformation estimation (translation only)
-def align_images_translation(img1, img2, scale=1, display=False): 
-
-    def estimate_translation(p1, p2):
+def translation_ransac(src_points, dst_points, scale): 
+    def estimate_transform(p1, p2):
         t = p2[0] - scale * p1[0]
         return t
+    
+    def apply_transform(points, t):
+        return scale * points + t
 
-    def ransac_translation(src_pts, dst_pts, threshold=3.0, max_iters=1000):
+    def ransac(src_pts, dst_pts, threshold=3.0, max_iters=500):
         # np.random.seed(0)
         best_inliers = []
         best_model = None
@@ -211,9 +173,9 @@ def align_images_translation(img1, img2, scale=1, display=False):
 
         for _ in range(max_iters):
             idx = np.random.choice(n, 2, replace=False)
-            t_try = estimate_translation(src_pts[idx], dst_pts[idx])
+            t_try = estimate_transform(src_pts[idx], dst_pts[idx])
 
-            transformed = scaled_src_pts + t_try
+            transformed = apply_transform(scaled_src_pts, t_try)
 
             dists_sq = np.sum((transformed - dst_pts) ** 2, axis=1)
             inliers = np.where(dists_sq < threshold_sq)[0]
@@ -228,9 +190,9 @@ def align_images_translation(img1, img2, scale=1, display=False):
         inlier_src = src_pts[best_inliers]
         inlier_dst = dst_pts[best_inliers]
 
-        return refine_translation(inlier_src, inlier_dst), best_inliers
+        return refine(inlier_src, inlier_dst), best_inliers
 
-    def refine_translation(src_pts, dst_pts):
+    def refine(src_pts, dst_pts):
         """Least squares solution using all inliers."""
         src_mean = src_pts.mean(axis=0)
         dst_mean = dst_pts.mean(axis=0)
@@ -238,7 +200,11 @@ def align_images_translation(img1, img2, scale=1, display=False):
         translation = dst_mean - scale * src_mean
     
         return scale, translation
+    
+    return ransac(src_points, dst_points)
 
+
+def align_images(img1, img2, scale=-1, display=False):
     orb = cv2.ORB_create()
     kp1, des1 = orb.detectAndCompute(img1, None)
     kp2, des2 = orb.detectAndCompute(img2, None)
@@ -252,19 +218,21 @@ def align_images_translation(img1, img2, scale=1, display=False):
     src_pts = np.float32([kp1[m.queryIdx].pt for m in matches])
     dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches])
 
-    transform, inliers = ransac_translation(src_pts, dst_pts)
-
-    if transform:
-        s, t = transform
+    if scale == -1:
+        transform, inliers = scale_translation_ransac(src_pts, dst_pts)
     else:
-        return img1, None
+        transform, inliers = translation_ransac(src_pts, dst_pts, scale)
 
+    if transform is None:
+        return img1, None
+    
+    s, t = transform
     T = np.array([
         [s, 0, t[0]],
         [0, s, t[1]],
         [0, 0, 1]
     ])
-    
+
     height, width = img1.shape
     aligned_img1 = cv2.warpPerspective(img1, T, (width, height), borderMode=cv2.BORDER_CONSTANT, borderValue=0)
 
@@ -279,7 +247,7 @@ def align_images_translation(img1, img2, scale=1, display=False):
 
     return aligned_img1, T
     
-    
+
 def calculate_mask_iou(img1, img2, display=False, transform=True, scale=-1):
     """
     Calculates Intersection over Union (IoU) for two mask images.
@@ -354,12 +322,10 @@ def calculate_mask_iou(img1, img2, display=False, transform=True, scale=-1):
         img1 = transparent_to_bw(img1)
         img2 = transparent_to_bw(img2)
 
+        # align and crop for iou calculation
         if transform: # default: align black and white images with homography transform
-            if scale == -1:
-                img1_aligned, _ = align_images_scale_translation(img1, img2, display=display)
-            else:
-                img1_aligned, _ = align_images_translation(img1, img2, scale=scale, display=display)
-            img1_processed, img2_processed = crop_img_together(img1_aligned, img2)
+            img2_aligned, _ = align_images(img2, img1, scale=scale, display=display)
+            img1_processed, img2_processed = crop_img_together(img1, img2_aligned)
         else:
             if scale > 0 and scale != 1:
                 h, w = img1.shape
@@ -376,18 +342,21 @@ def calculate_mask_iou(img1, img2, display=False, transform=True, scale=-1):
         if display:
             display_overlayed(img1_processed, img2_processed)
 
+        # calculate iou
         intersection = np.logical_and(img1_processed, img2_processed).sum()
         union = np.logical_or(img1_processed, img2_processed).sum()
-
         if union == 0:
-            return 1.0 if intersection == 0 else 0.0 # Both masks empty (IoU=1), or issue (IoU=0)
-        
+            return 1.0, None if intersection == 0 else 0.0, None # Both masks empty (IoU=1), or issue (IoU=0)
         iou = float(intersection) / float(union)
-        return iou
+        
+        if transform:
+            return iou, (img1, img2_aligned) # for visualization
+        else:
+            return iou, None
     
     except Exception as e:
         print(f"Error processing images for IoU): {e}")
-        return 0.0
+        return 0.0, None
 
 # --- Helper Function to Extract Sim ID from Filename ---
 def extract_sim_id_from_filename(filename):

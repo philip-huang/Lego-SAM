@@ -204,15 +204,17 @@ class LegoSegmenter:
             masks = masks.squeeze(1)
         return masks, scores
     
-    def remove_background(self, img_cv_cropped, mask):
+    def remove_background(self, img_cv_cropped, mask=None):
         """
         remove all non-red masks with hsv color space
         
         """
-        bool_mask = mask[0].astype(bool)
-        cutout = np.zeros((img_cv_cropped.shape[0], img_cv_cropped.shape[1], 4), dtype=np.uint8)
-        cutout[bool_mask, :3] = img_cv_cropped[bool_mask]
-        cutout[bool_mask, 3] = 255 # Alpha channel
+        cutout = img_cv_cropped
+        
+        if mask is not None:
+            bool_mask = mask[0].astype(bool)
+            cutout[bool_mask, :3] = img_cv_cropped[bool_mask]
+            cutout[bool_mask, 3] = 255 # Alpha channel
 
         # Convert to HSV color space
         hsv = cv2.cvtColor(cutout, cv2.COLOR_BGR2HSV)
@@ -222,7 +224,11 @@ class LegoSegmenter:
         # Create a mask for red color
         red_mask = cv2.inRange(hsv, lower_red, upper_red)
         # update the mask
-        mask[0][red_mask == 0] = 0
+        if mask is not None:
+            mask[0][red_mask == 0] = 0
+        else:
+            mask = red_mask[None, :, :]
+
         return mask
 
     def generate_single_mask_from_data(self, image_data_np: np.ndarray, text_prompt: str = None, save_id: int = None): # -> np.ndarray | None:
@@ -352,9 +358,13 @@ class LegoSegmenter:
             cv2.imwrite(str(current_output_dir / f"no_detection_{output_image_name}.jpg"), img_cv_cropped)
             return
 
-        # 3. Segment objects with SAM2
-        sam_masks, sam_scores = self.segment_with_sam2(image_pil, dino_boxes)
-        
+        # remove background
+        if self.camera_name == "sim_cam1" or self.camera_name == "sim_cam2":
+            img_cv = cv2.cvtColor(np.array(image_pil), cv2.COLOR_BGR2RGB)
+            sam_masks = self.remove_background(img_cv)
+        else:
+            # 3. Segment objects with SAM2
+            sam_masks, sam_scores = self.segment_with_sam2(image_pil, dino_boxes)
 
         # 4. Visualization and Saving
         # Load original image for visualization (and crop it)
@@ -365,9 +375,6 @@ class LegoSegmenter:
         else:
             img_cv_cropped = img_cv_original.copy()
 
-        # remove background
-        if self.camera_name == "sim_cam1" or self.camera_name == "sim_cam2":
-            sam_masks = self.remove_background(img_cv_cropped, sam_masks)
 
         self.save_dino_boxes(dino_boxes, sam_masks, dino_scores, dino_labels, img_cv_cropped, output_image_name)
 
@@ -416,15 +423,11 @@ def main():
 
     # Example argument
 
-    # old calibration
-    # python lego_segmenter.py --img-folder "sim_images/$task/cam1" --output-dir "outputs/sim_cam1/$task" --camera-name sim_cam1
-    # python lego_segmenter.py --img-folder "sim_images/$task/cam2" --output-dir "outputs/sim_cam2/$task" --camera-name sim_cam2
-    
-    # python lego_segmenter.py --img-folder "outputs/cam1/$task" --output-dir "outputs/cam1/$task" --camera-name cam1
-
     # new calibration
-    # python lego_segmenter.py --img-folder "sim_images2/$task/cam1" --output-dir "outputs2/sim_cam1/$task" --camera-name sim_cam1
-    # python lego_segmenter.py --img-folder "sim_images2/$task/cam2" --output-dir "outputs2/sim_cam2/$task" --camera-name sim_cam2
+    '''
+    python lego_segmenter.py --img-folder "sim_images2/$task/cam1" --output-dir "outputs/sim_cam1/$task" --camera-name sim_cam1
+    python lego_segmenter.py --img-folder "sim_images2/$task/cam2" --output-dir "outputs/sim_cam2/$task" --camera-name sim_cam2
+    '''
     
   
     args = parser.parse_args()

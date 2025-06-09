@@ -229,7 +229,7 @@ class DualCameraLegoClient:
             img_cam2_rgb,
             self.task # assembly_key
         )
-        live_cutout_cam1_rgba, live_cutout_cam2_rgba, best_sim_id, best_score, _ = results
+        live_cutout_cam1_rgba, live_cutout_cam2_rgba, _, _, best_sim_id, best_score, _ = results
 
         # # Publish cutouts (RGBA)
         # if live_cutout_cam1_rgba is not None:
