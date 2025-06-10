@@ -82,7 +82,8 @@ def get_image_embedding(image_path, scale_shortest_edge): # Added scale_shortest
         return None
 
 
-# ORB feature detection and RANSAC for transformation estimation (scale and translation only)
+# default
+# ORB feature detection and RANSAC for transformation estimation (scale and translation)
 def scale_translation_ransac(src_points, dst_points):
     def estimate(p1, p2):
         # Estimate scale and translation from 2 corresponding points

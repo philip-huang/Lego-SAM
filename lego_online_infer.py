@@ -126,10 +126,8 @@ class OnlineLegoInferer:
                           live_image_cam2_np: np.ndarray, # Expected RGB
                           assembly_key: str,
                           cur_assembling_step: int = -1,
-                          display=False,
-                          transform=True,
-                          scale=-1,
-                          save=True): # -> tuple[int | None, float, dict]:
+                          transform=True, scale=-1, debug_display=False,
+                          save_temp=True): # -> tuple[int | None, float, dict]:
         """
         Performs inference using two live camera images against simulation masks.
 
@@ -164,7 +162,7 @@ class OnlineLegoInferer:
                or (live_cutout_cam2_data is not None and live_cutout_cam2_data.shape[2] == 4))
 
         # Save the segmented cutouts to temporary files (image is rgb)
-        if save:
+        if save_temp:
             if live_cutout_cam1_data is not None:
                 live_cutout_cam1_path = self.temp_base_dir / f"live_cutout_{self.count:06d}_cam1.png"
                 bgr_cutout_cam1_data = cv2.cvtColor(live_cutout_cam1_data, cv2.COLOR_RGBA2BGRA)
@@ -192,7 +190,7 @@ class OnlineLegoInferer:
         all_sim_id_results = {}
 
         for sim_id in unique_sim_ids:
-            if display:
+            if debug_display:
                 print(f"{assembly_key}: comparing to sim_id {sim_id}")
 
             if cur_assembling_step > -1 and sim_id >= cur_assembling_step:
@@ -209,7 +207,7 @@ class OnlineLegoInferer:
             if sim_mask_p1 is not None: # Ensure sim exist
                 # live_cutout_cam1_data can be None, _calculate_mask_iou handles it
                 # convert to grayscale for IoU calculation
-                iou_cam1, transformed_cam1_imgs = calculate_mask_iou(live_cutout_cam1_data, sim_mask_p1, display=display, transform=transform, scale=scale)
+                iou_cam1, transformed_cam1_imgs = calculate_mask_iou(live_cutout_cam1_data, sim_mask_p1, display=debug_display, transform=transform, scale=scale)
                 num_valid_ious += 1
                 current_sum_iou += iou_cam1
 
@@ -217,7 +215,7 @@ class OnlineLegoInferer:
             sim_mask_p2 = sim_masks_cam2_map.get(sim_id)
             if sim_mask_p2 is not None and live_cutout_cam1_data is not None: # Ensure sim exist
                 # live_cutout_cam2_data can be None, _calculate_mask_iou handles it
-                iou_cam2, transformed_cam2_imgs = calculate_mask_iou(live_cutout_cam2_data, sim_mask_p2, display=display, transform=transform, scale=scale)
+                iou_cam2, transformed_cam2_imgs = calculate_mask_iou(live_cutout_cam2_data, sim_mask_p2, display=debug_display, transform=transform, scale=scale)
                 num_valid_ious += 1
                 current_sum_iou += iou_cam2
             
@@ -237,9 +235,11 @@ class OnlineLegoInferer:
                 best_transformed_cam1_imgs = transformed_cam1_imgs
                 best_transformed_cam2_imgs = transformed_cam2_imgs
 
-        return live_cutout_cam1_data, live_cutout_cam2_data, \
+        results = live_cutout_cam1_data, live_cutout_cam2_data, \
                 best_transformed_cam1_imgs, best_transformed_cam2_imgs, \
                 best_overall_sim_id, max_combined_iou, all_sim_id_results
+
+        return results
 
     def cleanup_all_temp_dirs(self):
         """Cleans up the base temporary directory used by this instance."""

@@ -1,9 +1,15 @@
+'''
+Visualize cutouts and IoU
+'''
+
 import lego_online_infer
 import cv2
 from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.ndimage import minimum_filter, maximum_filter
+from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
 import sys
 import os
@@ -12,11 +18,20 @@ from tqdm import tqdm
 import subprocess
 
 
-def combine(img, transformed_cutout, color):
+def _fig_to_image(fig):
+    FigureCanvas(fig)  # attach a canvas if not already attached
+    fig.canvas.draw()
+    w, h = fig.canvas.get_width_height()
+    img = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8)
+    img = img.reshape((h, w, 4))
+    return img
+
+
+def _combine(img, transformed_cutout, color, size=5):
     preprocessed_img = np.array(img)
 
-    min_vals = minimum_filter(transformed_cutout.astype(np.uint8), size=5)
-    max_vals = maximum_filter(transformed_cutout.astype(np.uint8), size=5)
+    min_vals = minimum_filter(transformed_cutout.astype(np.uint8), size=size)
+    max_vals = maximum_filter(transformed_cutout.astype(np.uint8), size=size)
     mask = (min_vals == 0) & (max_vals == 255)
 
     preprocessed_img[mask == True] = color
@@ -24,34 +39,30 @@ def combine(img, transformed_cutout, color):
     return preprocessed_img
 
 
-def color_gradient(score):
-    if score < 0.75:
-        return [255, 255*(score//0.75), 0]
-    else:
-        return [255*((1-score)//0.25), 255, 0]
-    
+def _color_gradient(score):
+    colors = [(0.0, "#FF0000"), (0.5, "#FF0000"), (0.87, "#FFE600"), (0.95, "#00FF00"), (1.0, "#00FF00")]
+    cmap = LinearSegmentedColormap.from_list("hex_gradient", colors)
+    return [c*255 for c in cmap(score)[:3]]
 
-def visualize(inferer, img1, img2, results, save_path="", display=False):
-    # save_path: png image path
-    # display: plt.show()
-    
+
+def visualize(inferer, img1, img2, results, save_path="", display_plt=False, output_np_array=True):
     _, _, transformed_cutouts1, transformed_cutouts2, best_id, best_score, details = results
 
-    if best_id:
-        color1 = color_gradient(details[best_id]['cam1_iou'])
-        color2 = color_gradient(details[best_id]['cam2_iou'])
+    if best_id is not None:
+        color1 = _color_gradient(details[best_id]['cam1_iou'])
+        color2 = _color_gradient(details[best_id]['cam2_iou'])
     else:
         color1 = color2 = [255, 0, 0]
         
     img1_segemented = inferer.segmenter_cam1.load_and_preprocess_image(img1)
     if transformed_cutouts1 is not None:
-        img1_segemented = combine(img1_segemented, transformed_cutouts1[0], [0,0,0])
-        img1_segemented = combine(img1_segemented, transformed_cutouts1[1], color1)
+        img1_segemented = _combine(img1_segemented, transformed_cutouts1[0], [255,255,255], size=3)
+        img1_segemented = _combine(img1_segemented, transformed_cutouts1[1], color1, size=7)
 
     img2_segemented = inferer.segmenter_cam2.load_and_preprocess_image(img2)
     if transformed_cutouts2 is not None:
-        img2_segemented = combine(img2_segemented, transformed_cutouts2[0], [0,0,0])
-        img2_segemented = combine(img2_segemented, transformed_cutouts2[1], color2)
+        img2_segemented = _combine(img2_segemented, transformed_cutouts2[0], [255,255,255], size=3)
+        img2_segemented = _combine(img2_segemented, transformed_cutouts2[1], color2, size=7)
 
     fig, axs = plt.subplots(1, 2, figsize=(8, 4))
 
@@ -71,8 +82,12 @@ def visualize(inferer, img1, img2, results, save_path="", display=False):
     if save_path:
         plt.savefig(save_path, bbox_inches='tight')
 
-    if display:
+    if display_plt:
         plt.show()
+
+    if output_np_array:
+        return _fig_to_image(fig)
+    
     plt.close()
     
 
@@ -85,13 +100,12 @@ if __name__ == "__main__":
     TASK = sys.argv[1] # cliff, R, faucet, etc.
     temp_video_dir = './temp_online_inference/video'
 
-    SIM_DATA_ROOT = "outputs" # Root dir where sim_cam1/, sim_cam2/ exist
-    SAM2_CHECKPOINT = "./checkpoints/sam2.1_hiera_large.pt" # Path to your SAM2 model
-    SAM2_CONFIG = "configs/sam2.1/sam2.1_hiera_l.yaml"    # Path to your SAM2 config
-
     ################
     
     print('Initializing inferer...')
+    SIM_DATA_ROOT = "outputs" # Root dir where sim_cam1/, sim_cam2/ exist
+    SAM2_CHECKPOINT = "./checkpoints/sam2.1_hiera_large.pt" # Path to your SAM2 model
+    SAM2_CONFIG = "configs/sam2.1/sam2.1_hiera_l.yaml"    # Path to your SAM2 config
 
     inferer = lego_online_infer.OnlineLegoInferer(
         sim_data_root_dir=SIM_DATA_ROOT,
@@ -133,6 +147,6 @@ if __name__ == "__main__":
         )
 
         visualize(inferer, live_image_cam1_np, live_image_cam2_np, results,
-                save_path=os.getcwd()+f'/temp_online_inference/video/{i:06d}.png', display=False)
+                save_path=os.getcwd()+f'/temp_online_inference/video/{i:06d}.png', display_plt=False)
 
     subprocess.call(f'ffmpeg -framerate 30 -i ./temp_online_inference/video/%06d.png -c:v libx264 -r 30 -pix_fmt yuv420p sideviewfail_{TASK}.mp4', shell=True, text=True)
