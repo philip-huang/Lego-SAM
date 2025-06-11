@@ -1,0 +1,9 @@
+numpy
+pandas
+opencv-python
+transformers
+supervision
+pycocotools
+addict
+yapf
+timm
