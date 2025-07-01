@@ -15,6 +15,7 @@ import numpy as np
 import torchvision.transforms
 from collections import Counter
 import matplotlib.pyplot as plt
+from sklearn.linear_model import RANSACRegressor, LinearRegression
 
 import numpy as np
 
@@ -82,21 +83,31 @@ def get_image_embedding(image_path, scale_shortest_edge): # Added scale_shortest
         return None
 
 
-# default
-# ORB feature detection and RANSAC for transformation estimation (scale and translation)
-def scale_translation_ransac(src_points, dst_points):
+# ORB feature detection and RANSAC for transformation estimation (scale and translation only)
+def scale_translation_ransac(src_points, dst_points, scale_bounds=(0.9, 1.1), translate_x_bounds=(-400, 400), translate_y_bounds=(-400, 400)):
     def estimate(p1, p2):
         # Estimate scale and translation from 2 corresponding points
         dp1 = p1[1] - p1[0]
         dp2 = p2[1] - p2[0]
-        scale = np.linalg.norm(dp2) / np.linalg.norm(dp1)
+
+        dp1_norm = np.linalg.norm(dp1)
+        if dp1_norm != 0:
+            scale = np.linalg.norm(dp2) / np.linalg.norm(dp1)
+        else:
+            scale = 0
         t = p2[0] - scale * p1[0]
         return scale, t
 
     def apply_transform(points, scale, t):
         return scale * points + t
+    
+    def is_within_bounds(s, t):
+        within_scale = scale_bounds[0] <= s <= scale_bounds[1]
+        within_tx = translate_x_bounds[0] <= t[0] <= translate_x_bounds[1]
+        within_ty = translate_y_bounds[0] <= t[1] <= translate_y_bounds[1]
+        return within_scale and within_tx and within_ty
 
-    def ransac(src_pts, dst_pts, threshold=3.0, scale_lower=0.9, scale_upper=1.1, max_iters=500):
+    def ransac(src_pts, dst_pts, threshold=3.0, max_iters=500):
         np.random.seed(0)
         best_inliers = []
         best_model = None
@@ -111,7 +122,7 @@ def scale_translation_ransac(src_points, dst_points):
             idx = np.random.choice(n, 2, replace=False)
             s_try, t_try = estimate(src_pts[idx], dst_pts[idx])
             
-            if not (scale_lower <= s_try <= scale_upper): # reject
+            if not is_within_bounds(s_try, t_try): # reject
                 continue
 
             transformed = apply_transform(src_pts, s_try, t_try)
@@ -142,222 +153,260 @@ def scale_translation_ransac(src_points, dst_points):
         if np.sum(src_centered ** 2) == 0:
             return None
         
-        scale = np.sum(dst_centered * src_centered) / np.sum(src_centered ** 2)
+        s = np.sum(dst_centered * src_centered) / np.sum(src_centered ** 2)
         
-        translation = dst_mean - scale * src_mean
-    
-        return scale, translation
+        t = dst_mean - s * src_mean
+        
+        if not is_within_bounds(s, t):
+            # print(f"Final transform s={s} t={t} not within bounds:", scale_bounds, translate_x_bounds, translate_y_bounds)
+            return None
+        return s, t
 
     return ransac(src_points, dst_points)
 
-
-# ORB feature detection and RANSAC for transformation estimation (translation only)
-def translation_ransac(src_points, dst_points, scale): 
-    def estimate_transform(p1, p2):
-        t = p2[0] - scale * p1[0]
-        return t
-    
-    def apply_transform(points, t):
-        return scale * points + t
-
-    def ransac(src_pts, dst_pts, threshold=3.0, max_iters=500):
-        # np.random.seed(0)
-        best_inliers = []
-        best_model = None
-
-        n = len(src_pts)
-        src_pts = np.asarray(src_pts)
-        dst_pts = np.asarray(dst_pts)
-
-        threshold_sq = threshold ** 2
-        scaled_src_pts = scale * src_pts
-
-        for _ in range(max_iters):
-            idx = np.random.choice(n, 2, replace=False)
-            t_try = estimate_transform(src_pts[idx], dst_pts[idx])
-
-            transformed = apply_transform(scaled_src_pts, t_try)
-
-            dists_sq = np.sum((transformed - dst_pts) ** 2, axis=1)
-            inliers = np.where(dists_sq < threshold_sq)[0]
-
-            if len(inliers) > len(best_inliers):
-                best_inliers = inliers
-                best_model = t_try
-
-        if best_model is None:
-            return None, []
-
-        inlier_src = src_pts[best_inliers]
-        inlier_dst = dst_pts[best_inliers]
-
-        return refine(inlier_src, inlier_dst), best_inliers
-
-    def refine(src_pts, dst_pts):
-        """Least squares solution using all inliers."""
-        src_mean = src_pts.mean(axis=0)
-        dst_mean = dst_pts.mean(axis=0)
-        
-        translation = dst_mean - scale * src_mean
-    
-        return scale, translation
-    
-    return ransac(src_points, dst_points)
-
-
-def align_images(img1, img2, scale=-1, display=False):
+# expected_T: (s, (tx, ty))
+def compute_2D_T(img1, img2, display_plt=False):
     orb = cv2.ORB_create()
     kp1, des1 = orb.detectAndCompute(img1, None)
     kp2, des2 = orb.detectAndCompute(img2, None)
 
     if des1 is None or des2 is None:
-        return img1, None
+        return None
 
     bf = cv2.BFMatcher(cv2.NORM_HAMMING)
     matches = bf.match(des1, des2)
 
     src_pts = np.float32([kp1[m.queryIdx].pt for m in matches])
     dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches])
-
-    if scale == -1:
-        transform, inliers = scale_translation_ransac(src_pts, dst_pts)
-    else:
-        transform, inliers = translation_ransac(src_pts, dst_pts, scale)
-
-    if transform is None:
-        return img1, None
     
-    s, t = transform
+    transform_params, inliers = scale_translation_ransac(src_pts, dst_pts)
+
+    if transform_params is None:
+        return None
+    
+    s, t = transform_params
     T = np.array([
         [s, 0, t[0]],
         [0, s, t[1]],
         [0, 0, 1]
     ])
 
-    height, width = img1.shape
-    aligned_img1 = cv2.warpPerspective(img1, T, (width, height), borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-
-    if display:
-        print(s, t)
+    if display_plt:
+        plt.figure(figsize=(10, 5))
         inlier_matches = [matches[i] for i in inliers]
         img_matches = cv2.drawMatches(img1, kp1, img2, kp2, inlier_matches, None,
                                     matchColor=(0, 255, 0), flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
         plt.imshow(img_matches)
         plt.axis('off')
-        plt.show()
 
-    return aligned_img1, T
+    return T
     
 
-def calculate_mask_iou(img1, img2, display=False, transform=True, scale=-1):
+def align_images(img1, img2, depth1=None, depth2=None, 
+                 ref_T=None, compute_new_T=True, display_plt=False):
+    '''
+    Returns aligned images and 2D transform matrix T
+    '''
+
+    # compute T
+    if compute_new_T: # compute alignment transform
+        T = compute_2D_T(img2, img1, display_plt)
+    elif ref_T is not None: # use calibrated transform 
+        T = ref_T
+    else: # crop and pad images, no transform
+        img1_a, img2_a, depth1_a, depth2_a = _crop_together(img1, img2, depth1, depth2)
+        return img1_a, img2_a, depth1_a, depth2_a, None
+    
+    if T is None:
+        return None, None, None, None, None
+    
+    img2_aligned = cv2.warpPerspective(img2, T, img2.shape, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+
+    if depth2 is not None:
+        depth2_aligned = cv2.warpPerspective(depth2, T, depth2.shape, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+    else:
+        depth2_aligned = None
+        
+    return img1, img2_aligned, depth1, depth2_aligned, T
+
+
+def compute_1D_T(depth1, depth2, residual_threshold=0.01, min_samples=0.5, max_iters=500):
+    """
+    Estimate scale and offset to align depth1 to depth2 using RANSAC on valid depth values.
+    Assumes: D2 ≈ scale * D1 + offset
+    """
+
+    valid_mask = (depth1 > 0) & (depth2 > 0)
+
+    z1 = depth1[valid_mask].flatten().reshape(-1, 1)
+    z2 = depth2[valid_mask].flatten().reshape(-1, 1)
+
+    if len(z1) < 2:
+        raise ValueError("Not enough valid points for RANSAC.")
+
+    model = RANSACRegressor(
+        estimator=LinearRegression(),
+        residual_threshold=residual_threshold,
+        min_samples=min_samples,
+        max_trials=max_iters,
+    )
+    model.fit(z1, z2)
+
+    scale = model.estimator_.coef_[0][0]
+    offset = model.estimator_.intercept_[0]
+    inlier_mask = np.zeros_like(depth1, dtype=bool)
+    inlier_mask[valid_mask] = model.inlier_mask_
+
+    return scale, offset 
+
+
+def align_depths(cutout, depth1, depth2, 
+                 ref_T=None, compute_new_T=True, display_plt=False):
+    '''
+    Returns aligned depth images, score, and 1D transform tuple (scale, offset)
+    '''
+    
+    if depth1 is None or depth2 is None:
+        return depth1, depth2, 0.0, None
+    
+    zero_mask = (cutout[:, :] == 0) | (depth1[:, :] == 0)
+
+    # align non-zero pixels
+    cam_depth_masked, sim_cam_depth_masked = np.copy(depth1), np.copy(depth2)
+    cam_depth_masked[zero_mask] = 0
+    sim_cam_depth_masked[zero_mask] = 0
+
+    if compute_new_T:
+        scale, offset = compute_1D_T(sim_cam_depth_masked, cam_depth_masked)
+    else:
+        assert(ref_T is not None)
+        scale, offset = ref_T
+
+    sim_cam_depth_aligned = scale * sim_cam_depth_masked + offset
+    sim_cam_depth_aligned[zero_mask] = 0
+
+    # calculate score
+    valid_mask = (cutout[:, :] != 0) & (depth1[:, :] != 0)
+    
+    if np.sum(valid_mask) == 0:
+        return depth1, depth2, 0.0, None
+    cam_1d, sim_cam_1d = cam_depth_masked[valid_mask], sim_cam_depth_aligned[valid_mask]
+    
+    min_val, max_val = sim_cam_1d.min(), sim_cam_1d.max()
+    if max_val - min_val == 0:
+        return depth1, depth2, 0.0, None
+    
+    cam_1d = (cam_1d-min_val) / (max_val-min_val)
+    sim_cam_1d = (sim_cam_1d-min_val) / (max_val-min_val)
+    score = 1 - np.sum(np.abs(sim_cam_1d - cam_1d)) / len(sim_cam_1d)
+
+    if display_plt:
+        plt.figure(figsize=(10, 5))
+        plt.subplot(1, 2, 1)
+        plt.imshow(cam_depth_masked, cmap="gray", vmin=0, vmax=255)
+        plt.axis('off')
+        plt.subplot(1, 2, 2)
+        plt.imshow(sim_cam_depth_aligned, cmap="gray", vmin=0, vmax=255)
+        plt.title(f'depth score: {score:.6f}')
+        plt.axis('off')
+        plt.show()
+    
+    return cam_depth_masked, sim_cam_depth_aligned, score, (scale, offset)
+
+
+# img1: live cam image
+# img2: sim_cam image
+def calculate_mask_iou(img1, img2, depth1=None, depth2=None, ref_T=None, 
+                       compute_new_T=True, display_plt=False):
     """
     Calculates Intersection over Union (IoU) for two mask images.
     Images are resized to target_size x target_size maintaining aspect ratio and padding.
 
-    display: show images
-    transform: detect and match features to align images
-    scale: scale image before aligning, or set to -1 to find best scale (limited to 0.9 to 1.1)
+    compute_new_T: compute new transform matrix using RANSAC if True
+    ref_T: reference transformation from past inference
+
+    Returns iou, depth_score, img2_aligned, (T_color, T_depth)
     """
 
-    def crop_img(img):
-        # Crop the image by taking a bounding box over non-zero pixels
-        # Find all non-zero points
-        coords = cv2.findNonZero(img)  # Returns a list of coordinates
-        # Get bounding box of non-zero pixels
-        x, y, w, h = cv2.boundingRect(coords)
-        cropped_img = img[y:y+h, x:x+w]
-        return cropped_img
-    
-    def crop_img_together(imgA, imgB):
-        # Crop the image by taking a bounding box over non-zero pixels
-        # Find all non-zero points
-        coords = cv2.findNonZero(cv2.bitwise_or(imgA, imgB))  # Returns a list of coordinates
-        # Get bounding box of non-zero pixels
-        x, y, w, h = cv2.boundingRect(coords)
-        cropped_imgA = imgA[y:y+h, x:x+w]
-        cropped_imgB = imgB[y:y+h, x:x+w]
-        return cropped_imgA, cropped_imgB
-    
-    def transparent_to_bw(img):
-        if len(img.shape) == 3 and img.shape[2] == 4:
-            alpha = img[:, :, 3]
-
-        output = np.zeros((img.shape[0], img.shape[1]), dtype=np.uint8) 
-        output[alpha > 0] = 255
-
-        return output
-
-    def display_overlayed(img1, img2):
-        plt.subplot(1, 3, 1)
-        plt.imshow(img1, cmap="gray", vmin=0, vmax=255)
-        plt.axis('off')
-        plt.subplot(1, 3, 2)
-        plt.imshow(img2, cmap="gray", vmin=0, vmax=255)
-        plt.axis('off')
-        plt.subplot(1, 3, 3)
-        plt.imshow(img1/2+img2/2, cmap="gray", vmin=0, vmax=255)
-        plt.axis('off')
-        plt.show()     
-    
     try:
-        # (old) thresholding requires grayscale images
+        results = align_images(img1, img2, depth1, depth2, ref_T[0], compute_new_T, display_plt)
+        img1_aligned, img2_aligned, depth1_aligned, depth2_aligned, T_color = results
 
-        # img1_cropped = crop_img(img1)
-        # img2_cropped = crop_img(img2)
-        # # pad the smaller image to match the size of the larger one
-        # max_height = max(img1_cropped.shape[0], img2_cropped.shape[0])
-        # max_width = max(img1_cropped.shape[1], img2_cropped.shape[1])
-        # img1_padded = cv2.copyMakeBorder(img1_cropped, 0, max_height - img1_cropped.shape[0], 0, max_width - img1_cropped.shape[1], cv2.BORDER_CONSTANT, value=0)
-        # img2_padded = cv2.copyMakeBorder(img2_cropped, 0, max_height - img2_cropped.shape[0], 0, max_width - img2_cropped.shape[1], cv2.BORDER_CONSTANT, value=0)
+        if T_color is None:
+            return 0.0, 0.0, None, (None, None)
 
-        # mask1_np = np.array(img1_padded)
-        # mask2_np = np.array(img2_padded)
-
-        # Binarize the masks (pixels > threshold are foreground)
-        # binary_mask1 = (img1 >= threshold) 
-        # binary_mask2 = (img2 >= threshold) 
-
-        # intersection = np.logical_and(binary_mask1, binary_mask2).sum()
-        # union = np.logical_or(binary_mask1, binary_mask2).sum()
-        
-        img1 = transparent_to_bw(img1)
-        img2 = transparent_to_bw(img2)
-
-        # align and crop for iou calculation
-        if transform: # default: align black and white images with homography transform
-            img2_aligned, _ = align_images(img2, img1, scale=scale, display=display)
-            img1_processed, img2_processed = crop_img_together(img1, img2_aligned)
-        else:
-            if scale > 0 and scale != 1:
-                h, w = img1.shape
-                img1 = cv2.resize(img1, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_NEAREST)
-                
-            img1_cropped = crop_img(img1)
-            img2_cropped = crop_img(img2)
-            # pad the smaller image to match the size of the larger one
-            max_height = max(img1_cropped.shape[0], img2_cropped.shape[0])
-            max_width = max(img1_cropped.shape[1], img2_cropped.shape[1])
-            img1_processed = cv2.copyMakeBorder(img1_cropped, 0, max_height - img1_cropped.shape[0], 0, max_width - img1_cropped.shape[1], cv2.BORDER_CONSTANT, value=0)
-            img2_processed = cv2.copyMakeBorder(img2_cropped, 0, max_height - img2_cropped.shape[0], 0, max_width - img2_cropped.shape[1], cv2.BORDER_CONSTANT, value=0)
-
-        if display:
-            display_overlayed(img1_processed, img2_processed)
+        depth1_aligned, depth2_aligned, depth_score, T_depth = align_depths(img2_aligned, depth1_aligned, depth2_aligned, 
+                                                      ref_T[1], compute_new_T, display_plt)
 
         # calculate iou
-        intersection = np.logical_and(img1_processed, img2_processed).sum()
-        union = np.logical_or(img1_processed, img2_processed).sum()
+        intersection = np.logical_and(img1_aligned, img2_aligned).sum()
+        union = np.logical_or(img1_aligned, img2_aligned).sum()
         if union == 0:
-            return 1.0, None if intersection == 0 else 0.0, None # Both masks empty (IoU=1), or issue (IoU=0)
-        iou = float(intersection) / float(union)
+            # Both masks empty (IoU=1), or issue (IoU=0)
+            if intersection == 0:
+                return 1.0, 0.0, None, (None, None)
+            else:
+                return 0.0, 0.0, None, (None, None) 
         
-        if transform:
-            return iou, (img1, img2_aligned) # for visualization
-        else:
-            return iou, None
+        iou = float(intersection) / float(union)
+
+        if display_plt:
+            _display_overlayed(img1_aligned, img2_aligned, score=iou)
+
+        return iou, depth_score, img2_aligned, (T_color, T_depth)
     
     except Exception as e:
-        print(f"Error processing images for IoU): {e}")
-        return 0.0, None
+        print(f"Error processing images for IoU: {e}")
+        return 0.0, 0.0, None, (None, None)
+
+
+def _crop_img(img, depth_img):
+    # Crop the image by taking a bounding box over non-zero pixels
+    # Find all non-zero points
+    coords = cv2.findNonZero(img)  # Returns a list of coordinates
+    # Get bounding box of non-zero pixels
+    x, y, w, h = cv2.boundingRect(coords)
+    cropped_img = img[y:y+h, x:x+w]
+    cropped_depth_img = depth_img[y:y+h, x:x+w]
+    return cropped_img, cropped_depth_img
+
+
+def _crop_together(img1, img2, depth1, depth2):
+    img1_cropped, depth1_cropped = _crop_img(img1, depth1)
+    img2_cropped, depth2_cropped = _crop_img(img2, depth2)
+    max_height = max(img1_cropped.shape[0], img2_cropped.shape[0])
+    max_width = max(img1_cropped.shape[1], img2_cropped.shape[1])
+    img1_a = cv2.copyMakeBorder(img1_cropped, 0, max_height - img1_cropped.shape[0], 0, max_width - img1_cropped.shape[1], cv2.BORDER_CONSTANT, value=0)
+    img2_a = cv2.copyMakeBorder(img2_cropped, 0, max_height - img2_cropped.shape[0], 0, max_width - img2_cropped.shape[1], cv2.BORDER_CONSTANT, value=0)
+    depth1_a = cv2.copyMakeBorder(depth1_cropped, 0, max_height - depth1_cropped.shape[0], 0, max_width - depth1_cropped.shape[1], cv2.BORDER_CONSTANT, value=0)
+    depth2_a = cv2.copyMakeBorder(depth2_cropped, 0, max_height - depth2_cropped.shape[0], 0, max_width - depth2_cropped.shape[1], cv2.BORDER_CONSTANT, value=0)
+    return img1_a, img2_a, depth1_a, depth2_a
+
+
+def _display_overlayed(imgA, imgB, score):
+    assert(imgA is not None and imgB is not None)
+    assert(imgA.shape == imgB.shape)   
+    # Crop the image by taking a bounding box over non-zero pixels
+    # Find all non-zero points
+    coords = cv2.findNonZero(cv2.bitwise_or(imgA, imgB))  # Returns a list of coordinates
+    # Get bounding box of non-zero pixels
+    x, y, w, h = cv2.boundingRect(coords)
+    cropped_imgA = imgA[y:y+h, x:x+w]
+    cropped_imgB = imgB[y:y+h, x:x+w]
+
+    plt.subplots()
+    plt.subplot(1, 3, 1)
+    plt.imshow(cropped_imgA, cmap="gray", vmin=0, vmax=255)
+    plt.axis('off')
+    plt.subplot(1, 3, 2)
+    plt.imshow(cropped_imgB, cmap="gray", vmin=0, vmax=255)
+    plt.axis('off')
+    plt.subplot(1, 3, 3)
+    plt.imshow(cropped_imgA/2+cropped_imgB/2, cmap="gray", vmin=0, vmax=255)
+    plt.title(f'iou: {score:.6f}')
+    plt.axis('off')
+    plt.show()  
+
 
 # --- Helper Function to Extract Sim ID from Filename ---
 def extract_sim_id_from_filename(filename):
@@ -520,7 +569,7 @@ def run_evaluation(keys_to_eval, class_json_path, base_output_dir, results_file_
                                 except Exception as e:
                                     print(f"Error reading images for IoU calculation: {e}")
                                     return 0.0
-                                similarity = calculate_mask_iou(real_gray, sim_gray) # scale_val is target_size  
+                                similarity, _, _ = calculate_mask_iou(real_gray, sim_gray) # scale_val is target_size  
                                 print(f"      IoU for {os.path.basename(real_image_path)} vs {os.path.basename(sim_mask_path)}: {similarity:.4f}")
                             
                             if similarity > highest_similarity_at_scale_cam:

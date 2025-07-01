@@ -17,6 +17,7 @@ from PIL import Image
 from sam2.build_sam import build_sam2
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection
+import matplotlib.pyplot as plt
 
 # Placeholder for utils.supervision_utils.CUSTOM_COLOR_MAP
 # This should be a list of hex color strings, ensure it's defined if used from utils
@@ -74,20 +75,22 @@ class LegoSegmenter:
 
         # Crop settings
         self.crop_box_dict = {
-            "cam1": (1350, 550, 2000, 1200),  # (x1, y1, x2, y2)
-            "cam2": (1600, 600, 2250, 1250),
-            "sim_cam1": (1400, 500, 2050, 1150),
-            "sim_cam2": (1550, 500, 2200, 1150),
+            "cam1": (1350, 505, 2000, 1155),  # (x1, y1, x2, y2)
+            "cam2": (1600, 575, 2250, 1225),
+            "sim_cam1": (1350, 505, 2000, 1155),
+            "sim_cam2": (1700, 475, 2350, 1125),
             "default": None
         }
-        # self.crop_box_dict = {
-        #     "cam1": (2050, 900, 2600, 1550),  # (x1, y1, x2, y2)
-        #     "cam2": (1150, 1000, 1700, 1600),
-        #     "sim_cam1": (2200, 900, 2750, 1550),
-        #     "sim_cam2": (1150, 900, 1700, 1550),
-        #     "default": None
-        # }
+        self.depth_normalize_range_dict = {
+            "cam1": (700, 900),  # (min, max)
+            "cam2": (700, 900),
+            "sim_cam1": (0.65, 0.95),
+            "sim_cam2": (0.65, 0.95),
+            "default": None
+        }
+
         self.crop_box = self.crop_box_dict.get(self.camera_name, self.crop_box_dict["default"])
+        self.depth_normalize_range = self.depth_normalize_range_dict.get(self.camera_name, self.depth_normalize_range_dict["default"])
 
         # Annotators
         self.box_annotator = sv.BoxAnnotator(color=ColorPalette.from_hex(CUSTOM_COLOR_MAP))
@@ -120,8 +123,28 @@ class LegoSegmenter:
             image = image.crop(self.crop_box)
         
         return image.convert("RGB")
+        
+    def load_and_preprocess_depth_image(self, image_source):
+        """
+        Loads an image from a path, PIL image, or NumPy array, and preprocesses it.
+        Preprocessing includes cropping based on camera_name.
+        Returns a PIL Image object in grayscale format.
+        """
+        if isinstance(image_source, str): # Path
+            image = Image.fromarray(np.load(image_source)['arr_0'].astype(np.float32))
+        elif isinstance(image_source, Image.Image): # PIL Image
+            image = image_source
+        elif isinstance(image_source, np.ndarray): # NumPy array
+            image = Image.fromarray(image_source.astype(np.float32))
+        else:
+            raise ValueError("image_source must be a path string, PIL Image, or NumPy array.")
 
-    def detect_with_grounding_dino(self, image_pil, text_prompt=None):
+        if self.crop_box:
+            image = image.crop(self.crop_box)
+        
+        return image
+    
+    def detect_with_grounding_dino(self, image_pil, text_prompt=None, use_expected=False):
         """
         Performs object detection using Grounding DINO.
         Args:
@@ -158,8 +181,10 @@ class LegoSegmenter:
             x1, y1, x2, y2 = box
             box_area = (x2 - x1) * (y2 - y1)
             area_ratio = box_area / image_area
-            # Score peaks when area_ratio is 0.2, decreases otherwise
-            area_factor = 1 - abs(area_ratio - 0.2) if image_area > 0 else 1.0
+            if use_expected:
+                area_factor = area_ratio
+            else:
+                area_factor = 1 - abs(area_ratio - 0.2) if image_area > 0 else 1.0
             adjusted_score = score * area_factor
             adjusted_scores.append(adjusted_score)
         # sort the top k boxes by adjusted score and adjust the results
@@ -203,8 +228,8 @@ class LegoSegmenter:
         if masks.ndim == 4 and masks.shape[1] == 1: # (N, 1, H, W)
             masks = masks.squeeze(1)
         return masks, scores
-    
-    def remove_background(self, img_cv_cropped, mask=None):
+
+    def remove_nonred_background(self, img_cv_cropped, mask=None):
         """
         remove all non-red masks with hsv color space
         
@@ -230,8 +255,9 @@ class LegoSegmenter:
             mask = red_mask[None, :, :]
 
         return mask
+    
 
-    def generate_single_mask_from_data(self, image_data_np: np.ndarray, text_prompt: str = None, save_id: int = None): # -> np.ndarray | None:
+    def generate_single_mask_from_data(self, image_data_np: np.ndarray, sim_cam_box: tuple, text_prompt: str = None, save_id: int = None, display_plt=False): # -> np.ndarray | None:
         """
         Processes image data (NumPy array) in memory to get a single segmentation mask.
         Returns a 2D NumPy array (uint8, 0 or 255) for the mask, or None.
@@ -242,20 +268,48 @@ class LegoSegmenter:
         image_pil = self.load_and_preprocess_image(image_data_np) # Returns PIL RGB
 
         # 2. Detect objects with Grounding DINO
-        # The detect_with_grounding_dino method already implements top_k=1 logic internally.
-        dino_boxes, dino_scores, dino_labels = self.detect_with_grounding_dino(image_pil, text_prompt)
+        if sim_cam_box == (0,0,0,0):
+            return np.asarray(image_pil), np.zeros((image_pil.size[1], image_pil.size[0], 4), dtype=np.uint8)
+        elif sim_cam_box is not None:
+            image_pil_cropped = image_pil.crop(sim_cam_box)
+            dino_boxes, dino_scores, dino_labels = self.detect_with_grounding_dino(image_pil_cropped, text_prompt, use_expected=True)
+        else:
+            dino_boxes, dino_scores, dino_labels = self.detect_with_grounding_dino(image_pil, text_prompt, use_expected=False)
+
+        if display_plt:
+            if sim_cam_box is not None:
+                display_dino_img = np.array(image_pil_cropped)
+            else:
+                display_dino_img = np.array(image_pil)
+            x1, y1, x2, y2 = dino_boxes.squeeze().tolist()
+            pt1 = (int(x1), int(y1))
+            pt2 = (int(x2), int(y2))       
+            cv2.rectangle(display_dino_img, pt1, pt2, (0, 255, 0), 2)
+            plt.imshow(display_dino_img) #cv2.cvtColor(display_img, cv2.COLOR_BGR2RGB))
+            plt.show()
 
         if dino_boxes is None or len(dino_boxes) == 0:
             print(f"LegoSegmenter: No objects detected by DINO for in-memory image ({self.camera_name}).")
-            return None
+            return None, None
+        
+        if sim_cam_box is not None:
+            dino_boxes[:, 0] += sim_cam_box[0]
+            dino_boxes[:, 1] += sim_cam_box[1]
+            dino_boxes[:, 2] += sim_cam_box[0]
+            dino_boxes[:, 3] += sim_cam_box[1]
+
+            # sam_input_img = self.mask_outside_margin(np.array(image_pil_cropped), sim_cam_box, margin=50)
+            sam_input_img = image_pil
+        else:
+            sam_input_img = image_pil
 
         # 3. Segment objects with SAM2
         # sam_masks_tensor is (N, H, W) tensor. For top_k=1 from DINO, N should be 1.
-        sam_masks_tensor, sam_scores = self.segment_with_sam2(image_pil, dino_boxes)
+        sam_masks_tensor, sam_scores = self.segment_with_sam2(sam_input_img, dino_boxes)
 
         if sam_masks_tensor is None or sam_masks_tensor.shape[0] == 0:
             print(f"LegoSegmenter: SAM2 did not produce any masks ({self.camera_name}).")
-            return None
+            return None, None
 
         # Assuming DINO returned one box and SAM one mask for it
         primary_mask_tensor = sam_masks_tensor[0] # Shape (H, W)
@@ -280,8 +334,12 @@ class LegoSegmenter:
             image_np_bgr = cv2.cvtColor(image_np_rgb, cv2.COLOR_RGB2BGR)
             save_name = f'{save_id:06d}'
             self.save_dino_boxes(dino_boxes, sam_masks_tensor, dino_scores, dino_labels, image_np_bgr, save_name)
-            
-        return cutout_rgba
+
+        if display_plt:
+            plt.imshow(cutout_rgba)
+            plt.show()
+
+        return np.asarray(image_pil), cutout_rgba
 
     def _single_mask_to_rle(self, mask_tensor):
         mask_np = mask_tensor.astype(np.uint8)
@@ -293,6 +351,8 @@ class LegoSegmenter:
         if masks_np.ndim == 2: # Single mask
             masks_np = np.expand_dims(masks_np, axis=0)
 
+        cutouts = {}
+
         for i, mask_H_W in enumerate(masks_np):
             bool_mask = mask_H_W.astype(bool)
             cutout = np.zeros((original_image_cv_cropped.shape[0], original_image_cv_cropped.shape[1], 4), dtype=np.uint8)
@@ -302,6 +362,10 @@ class LegoSegmenter:
             cutout_filename = output_subdir / f"cutout_{base_name}_mask_{i}.png"
             cv2.imwrite(str(cutout_filename), cutout)
             print(f"Saved cutout to {cutout_filename}")
+
+            cutouts[cutout_filename] = cutout
+        
+        return cutouts
 
     def save_dino_boxes(self, dino_boxes, sam_masks, dino_scores, dino_labels, img_cv_cropped, output_image_name):
         detections = sv.Detections(
@@ -323,7 +387,7 @@ class LegoSegmenter:
         # Save annotated DINO prompts for SAM
         cv2.imwrite(str(self.output_dir / f"sam_prompt_{output_image_name}.jpg"), annotated_frame)
 
-    def process_image_full_pipeline(self, image_path, output_image_name=None):
+    def process_image_full_pipeline(self, image_path, npz_path=None, output_image_name=None):
         """
         Processes a single image through the full pipeline: load, preprocess, detect, segment, visualize, and save.
         """
@@ -361,7 +425,7 @@ class LegoSegmenter:
         # remove background
         if self.camera_name == "sim_cam1" or self.camera_name == "sim_cam2":
             img_cv = cv2.cvtColor(np.array(image_pil), cv2.COLOR_BGR2RGB)
-            sam_masks = self.remove_background(img_cv)
+            sam_masks = self.remove_nonred_background(img_cv)
         else:
             # 3. Segment objects with SAM2
             sam_masks, sam_scores = self.segment_with_sam2(image_pil, dino_boxes)
@@ -379,7 +443,7 @@ class LegoSegmenter:
         self.save_dino_boxes(dino_boxes, sam_masks, dino_scores, dino_labels, img_cv_cropped, output_image_name)
 
         # Save cutouts
-        self._save_cutouts(img_cv_cropped, sam_masks, current_output_dir, output_image_name)
+        cutouts = self._save_cutouts(img_cv_cropped, sam_masks, current_output_dir, output_image_name)
 
         if self.dump_json_results:
             mask_rles = [self._single_mask_to_rle(mask) for mask in sam_masks]
@@ -406,6 +470,44 @@ class LegoSegmenter:
                 json.dump(json_results, f, indent=4)
             print(f"Saved JSON results to {current_output_dir / f'results_{output_image_name}.json'}")
 
+    
+        # depth image
+        if npz_path is not None:            
+            print(f"Processing depth image: {npz_path}")
+            
+            current_output_dir = self.output_dir
+            current_output_dir.mkdir(parents=True, exist_ok=True)
+
+            image_pil = self.load_and_preprocess_depth_image(npz_path)
+            image_cv = np.array(image_pil)
+
+            for cutout_filename in cutouts:
+                image_cv = self.cutout_depth(image_cv, cutout=cutouts[cutout_filename])
+                cv2.imwrite(str(cutout_filename).replace('.', '_depth.'), image_cv)
+
+    # replace pixels not in cutout with nan. input and output are grayscale
+    def cutout_depth(self, cropped_depth_cv, cutout=None):
+        assert(len(cropped_depth_cv.shape) == 2)
+
+        if cutout is not None:
+            if len(cutout.shape) == 3 and cutout.shape[2] == 4:
+                mask = (cutout[:, :, 3] == 0)
+                img = cropped_depth_cv.astype(np.float32)
+                img[mask] = np.nan
+
+            elif len(cutout.shape) == 2:
+                mask = (cutout[:, :] == np.nan)
+                img = cropped_depth_cv.astype(np.float32)
+                img[mask] = np.nan
+        else:
+            img = cropped_depth_cv
+
+        if self.depth_normalize_range is not None:
+            min_val, max_val = self.depth_normalize_range[0], self.depth_normalize_range[1]
+            img = np.where((min_val < img) & (img < max_val), img, min_val)
+            img = (img - img.min()) / (img.max()-img.min()) * 255.0
+        return img  
+
 
 def main():
     parser = argparse.ArgumentParser(description="Lego Segmentation using Grounding DINO and SAM2.")
@@ -421,12 +523,14 @@ def main():
     parser.add_argument("--force-cpu", action="store_true", help="Force use of CPU even if CUDA is available.")
     parser.add_argument("--top-k", type=int, default=1, help="Number of top detections to process from Grounding DINO.")
 
-    # Example argument
+    # Example run: processing sim_cam images
 
-    # new calibration
     '''
-    python lego_segmenter.py --img-folder "sim_images2/$task/cam1" --output-dir "outputs/sim_cam1/$task" --camera-name sim_cam1
-    python lego_segmenter.py --img-folder "sim_images2/$task/cam2" --output-dir "outputs/sim_cam2/$task" --camera-name sim_cam2
+        for task in cliff faucet fish_high R S stairs_rotated; do
+            export task
+            /home/mmliu/.venv/bin/python lego_segmenter.py --img-folder "sim_images/sim_images_061925_depth/$task/cam1" --output-dir "outputs/sim_cam1/$task" --camera-name sim_cam1
+            /home/mmliu/.venv/bin/python lego_segmenter.py --img-folder "sim_images/sim_images_061925_depth/$task/cam2" --output-dir "outputs/sim_cam2/$task" --camera-name sim_cam2
+        done
     '''
     
   
@@ -448,7 +552,6 @@ def main():
          # For now, class handles image-specific subdirs within the provided args.output_dir
          pass
 
-
     segmenter = LegoSegmenter(
         grounding_dino_model_id=args.grounding_model,
         sam2_checkpoint_path=args.sam2_checkpoint,
@@ -464,15 +567,22 @@ def main():
     if args.img_folder:
         img_folder_path = Path(args.img_folder)
         supported_extensions = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif']
-        image_paths = [p for p in sorted(img_folder_path.iterdir()) if p.is_file() and p.suffix.lower() in supported_extensions]
+        image_paths = [p for p in sorted(img_folder_path.iterdir()) if p.is_file() and p.suffix.lower() in supported_extensions
+                                                                                    and 'depth.' not in str(p)]
 
+        # process color images
         if not image_paths:
             print(f"No supported images found in folder: {img_folder_path}")
         else:
             print(f"Found {len(image_paths)} images to process in {img_folder_path}.")
             for img_p in image_paths:
-                segmenter.process_image_full_pipeline(str(img_p)) # output_image_name will be img_p.stem
+                depth_img_p = img_p.with_name(img_p.stem + "_depth.npz")
+                if depth_img_p.is_file():
+                    segmenter.process_image_full_pipeline(str(img_p), npz_path=str(depth_img_p))
+                else:
+                    segmenter.process_image_full_pipeline(str(img_p)) # output_image_name will be img_p.stem
             print(f"All images processed. Results saved to {final_output_dir}")
+
     else:
         if not Path(args.img_path).exists():
             print(f"Error: Image path does not exist: {args.img_path}")

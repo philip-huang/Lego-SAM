@@ -8,13 +8,14 @@ __pycache__/
 build/*
 _C.*
 outputs/*
+output_videos/*
+sim_images/*
 checkpoints/*.pt
 *test*
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
-
 # C extensions
 *.so
 

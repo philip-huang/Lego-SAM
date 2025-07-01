@@ -14,6 +14,7 @@ import time
 
 # Assuming OnlineLegoInferer is in a module that can be imported
 from lego_online_infer import OnlineLegoInferer # Ensure this path is correct for your Docker env
+import lego_visualize
 
 # Helper to convert OpenCV image to ROS Image JSON for rosbridge
 def cv_image_to_ros_image_json(cv_image, encoding, frame_id="camera", timestamp=None):
@@ -169,6 +170,7 @@ class DualCameraLegoClient:
         self.latest_image_cam2 = None
         self.latest_header_cam1 = None
         self.latest_header_cam2 = None
+        self.latest_assembling_step = -1
         self.latest_data_lock = asyncio.Lock() # To protect access to latest_image_camX and latest_header_camX
 
 
@@ -212,8 +214,16 @@ class DualCameraLegoClient:
             # DO NOT call try_process_images here anymore
         except Exception as e:
             print(f"Error processing cam2 image: {e}")
+
+    async def handler_assembly_step(self, msg):
+        # print("Received assembly step")
+        try:
+            async with self.latest_data_lock:
+                self.latest_assembling_step = int(msg['msg']['data'])
+        except Exception as e:
+            print(f"Error processing assembly step: {e}")
             
-    async def _perform_inference_and_publish(self, img_cam1_np_orig, img_cam2_np_orig, header_cam1_orig, header_cam2_orig):
+    async def _perform_inference_and_publish(self, img_cam1_np_orig, img_cam2_np_orig, header_cam1_orig, header_cam2_orig, cur_assembling_step):
         """
         Contains the core logic for inference and publishing results.
         Takes copies of images and headers to process.
@@ -227,9 +237,14 @@ class DualCameraLegoClient:
         results = self.inferer.infer_dual_camera(
             img_cam1_rgb,
             img_cam2_rgb,
-            self.task # assembly_key
+            self.task, # assembly_key,
+            cur_assembling_step=cur_assembling_step,
         )
-        live_cutout_cam1_rgba, live_cutout_cam2_rgba, _, _, best_sim_id, best_score, _ = results
+        best_sim_id = results.best_sim_id
+        best_score = results.best_score
+
+        visualize_path = self.inferer.temp_base_dir / f"visualize_{self.inferer.count:06d}.png"
+        visualize_img = lego_visualize.visualize(self.inferer, img_cam1_rgb, img_cam2_rgb, results, cur_assembling_step, save_path=visualize_path)
 
         # # Publish cutouts (RGBA)
         # if live_cutout_cam1_rgba is not None:
@@ -262,6 +277,7 @@ class DualCameraLegoClient:
             img_cam2_to_process = None
             header_cam1_to_process = None
             header_cam2_to_process = None
+            cur_assembling_step = -1
 
             async with self.latest_data_lock:
                 if self.latest_image_cam1 is not None and self.latest_image_cam2 is not None:
@@ -270,6 +286,7 @@ class DualCameraLegoClient:
                     img_cam2_to_process = self.latest_image_cam2.copy()
                     header_cam1_to_process = self.latest_header_cam1 # Headers are dicts, shallow copy is fine
                     header_cam2_to_process = self.latest_header_cam2
+                    cur_assembling_step = self.latest_assembling_step
                     
                     # Optional: Clear them if you only want to process each image pair once
                     # self.latest_image_cam1 = None 
@@ -281,7 +298,8 @@ class DualCameraLegoClient:
                         img_cam1_to_process, 
                         img_cam2_to_process,
                         header_cam1_to_process,
-                        header_cam2_to_process
+                        header_cam2_to_process,
+                        cur_assembling_step
                     )
                 except Exception as e:
                     print(f"Error during scheduled inference: {e}")
@@ -298,6 +316,7 @@ class DualCameraLegoClient:
 
             await self.subscribe_to_topic(websocket, self.cam1_topic)
             await self.subscribe_to_topic(websocket, self.cam2_topic)
+            await self.subscribe_to_topic(websocket, self.lego_topic, msg_type="std_msgs/Int32")
 
             # Start the periodic inference scheduler as a background task
             scheduler_task = asyncio.create_task(self.periodic_inference_scheduler())
@@ -312,6 +331,8 @@ class DualCameraLegoClient:
                         await self.image_handler_cam1(message)
                     elif topic == self.cam2_topic:
                         await self.image_handler_cam2(message)
+                    elif topic == self.lego_topic:
+                        await self.handler_assembly_step(message)
                 except json.JSONDecodeError:
                     print(f"Could not decode JSON: {message_str}")
                 except Exception as e:

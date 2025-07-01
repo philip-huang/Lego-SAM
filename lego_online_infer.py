@@ -10,6 +10,8 @@ from pathlib import Path
 import time
 import shutil
 from PIL import Image # For saving numpy array to pass to segmenter
+import matplotlib.pyplot as plt
+from types import SimpleNamespace
 
 # Assuming lego_segmenter.py is in the Python path or same directory
 from lego_segmenter import LegoSegmenter
@@ -74,6 +76,10 @@ class OnlineLegoInferer:
         self.sim_mask_info_cache = {} # Cache: {assembly_key: {sim_cam_name: {sim_id: path}}}
         self.count = 0
 
+        # based on 05/26/2025 calibration
+        self.calibrated_T = {'sim_cam1': (np.array([[0.9277678728103638, 0.0, 39.141693115234375], [0.0, 0.9277678728103638, 60.713409423828125], [0.0, 0.0, 1.0]]),(0.8585859110425732, 68.25756399151715)),
+		'sim_cam2': (np.array([[0.9247972369194031, 0.0, 126.83160400390625], [0.0, 0.9247972369194031, 13.537094116210938], [0.0, 0.0, 1.0]]),(1.281410217285156, 25.6279296875))}
+        
     def _get_simulation_masks_for_key_and_cam(self, assembly_key: str, sim_camera_name: str): # -> dict[int, str]:
         """
         Loads and caches paths to simulation masks for a given assembly_key and sim_camera_name.
@@ -85,7 +91,9 @@ class OnlineLegoInferer:
             return self.sim_mask_info_cache[assembly_key][sim_camera_name]
 
         sim_ref_dir = self.sim_data_root_dir / sim_camera_name / f"{assembly_key}"
-        mask_paths_with_ids = {}
+        id_to_mask = {}
+        id_to_box = {}
+        id_to_depth = {}
 
         if not sim_ref_dir.is_dir():
             print(f"Warning: Simulation reference directory not found: {sim_ref_dir}")
@@ -93,41 +101,90 @@ class OnlineLegoInferer:
             sim_files_in_dir = []
             print(sim_ref_dir)
             for ext in self.IMAGE_EXTENSIONS:
-                sim_files_in_dir.extend(list(sim_ref_dir.glob(f"cutout_*{ext}"))) # More specific glob
+                for path in sim_ref_dir.glob(f"cutout_*{ext}"):
+                    if "depth." not in path.name:
+                        sim_files_in_dir.append(path)
+                # sim_files_in_dir.extend(list(sim_ref_dir.glob(f"cutout_*{ext}"))) # More specific glob
 
             for sim_path in sim_files_in_dir:
                 sim_id = extract_sim_id_from_filename(sim_path.name)
                 if sim_id is not None:
                     # sim_grayscale = cv2.imread(str(sim_path), cv2.IMREAD_GRAYSCALE)
-                    sim_grayscale = cv2.imread(str(sim_path), cv2.IMREAD_UNCHANGED)
-                    mask_paths_with_ids[sim_id] = sim_grayscale
-        
+                    sim_bgra = cv2.imread(str(sim_path), cv2.IMREAD_UNCHANGED)
+                    sim_bw = self.rgba_to_bw(sim_bgra)
+                    id_to_mask[sim_id] = sim_bw
+                    id_to_box[sim_id] = self.get_nontransparent_bbox(sim_bw, T=self.calibrated_T[sim_camera_name][0])
+                    sim_depth = cv2.imread(str(sim_path).replace('.', '_depth.'), cv2.IMREAD_UNCHANGED)
+                    id_to_depth[sim_id] = sim_depth
+
         if assembly_key not in self.sim_mask_info_cache:
             self.sim_mask_info_cache[assembly_key] = {}
-        self.sim_mask_info_cache[assembly_key][sim_camera_name] = mask_paths_with_ids
-        return mask_paths_with_ids
+        self.sim_mask_info_cache[assembly_key][sim_camera_name] = (id_to_mask, id_to_box, id_to_depth)
+        return id_to_mask, id_to_box, id_to_depth
 
-    def _segment_live_image(self, image_data_np: np.ndarray, camera_name: str): # -> np.ndarray | None:
+    def _segment_live_image(self, image_data_np: np.ndarray, camera_name: str, depth_data_np: np.ndarray =None, sim_cam_box=None, display_plt=False): # -> np.ndarray | None:
         """
         Segments a live image (NumPy array, RGB) using LegoSegmenter in-memory.
         Returns the primary cutout mask as a NumPy array (uint8, 0 or 255), or None.
         """
         segmenter = self.segmenter_cam1 if camera_name == "cam1" else self.segmenter_cam2
         
-        mask_np = segmenter.generate_single_mask_from_data(image_data_np, text_prompt=segmenter.default_text_prompt, save_id = self.count) 
+        cropped_img, mask_np = segmenter.generate_single_mask_from_data(image_data_np, sim_cam_box, text_prompt=segmenter.default_text_prompt, save_id = self.count, display_plt=display_plt) 
+        
         if mask_np is None:
             # print(f"Debug: Segmentation returned None for live image from {camera_name}.")
             pass # Error already printed by LegoSegmenter or this method earlier
         
-        return mask_np
+        if depth_data_np is not None:
+            cropped_depth = segmenter.load_and_preprocess_depth_image(depth_data_np)
+            masked_depth = segmenter.cutout_depth(np.asarray(cropped_depth), cutout=None)
+        else:
+            masked_depth = None
+
+        return cropped_img, mask_np, masked_depth
+
+    # box from sim image for SAM prompt
+    # transform to align with live image
+    def get_nontransparent_bbox(self, bw_img, T=None, margin=5):
+        non_zero = np.argwhere(bw_img > 0)
+        if non_zero.size == 0:
+            return (0,0,0,0)  # Fully transparent image
+        (y_min, x_min), (y_max, x_max) = non_zero.min(axis=0), non_zero.max(axis=0)
+        
+        if T is not None:
+            x_h = np.array([x_min, y_min, 1])
+            x_transformed = T @ x_h 
+            x_min, y_min = x_transformed[:2]
+
+            x_h = np.array([x_max, y_max, 1])
+            x_transformed = T @ x_h 
+            x_max, y_max = x_transformed[:2]
+
+        return (x_min-margin, y_min-margin, x_max+margin, y_max+margin)
+
+    def rgba_to_bw(self, img):
+        if img is None:
+            return None
+        
+        assert(len(img.shape) == 3 and img.shape[2] == 4)
+        alpha = img[:, :, 3]
+
+        output = np.zeros((img.shape[0], img.shape[1]), dtype=np.uint8) 
+        output[alpha > 0] = 255
+
+        return output
 
     def infer_dual_camera(self,
                           live_image_cam1_np: np.ndarray, # Expected RGB
                           live_image_cam2_np: np.ndarray, # Expected RGB
                           assembly_key: str,
-                          cur_assembling_step: int = -1,
-                          transform=True, scale=-1, debug_display=False,
-                          save_temp=True): # -> tuple[int | None, float, dict]:
+                          live_depth_cam1_np: np.ndarray =None,
+                          live_depth_cam2_np: np.ndarray =None,
+                          cur_assembling_step: int =-1,
+                          compute_new_T=True,
+                          save=True,
+                          display=False,
+                          display_ids=[]): # -> tuple[int | None, float, dict]:
         """
         Performs inference using two live camera images against simulation masks.
 
@@ -136,9 +193,8 @@ class OnlineLegoInferer:
             live_image_cam2_np: NumPy array for camera 2 image (RGB).
             assembly_key: The key for the current assembly stage (e.g., "S").
 
-            display: show images
-            transform: detect and match features to align images
-            scale: scale image before aligning, or set to -1 to find best scale (limited to 0.9 to 1.1)
+            compute_new_T: detect and match features to align images
+            save: save images to temp directory
 
         Returns:
             Tuple: (best_overall_sim_id, max_combined_iou_score, per_sim_id_details)
@@ -152,94 +208,139 @@ class OnlineLegoInferer:
         live_image_unique_id = f"{assembly_key}_{(time.time_ns()//100000000):d}"
 
         self.count += 1
-        live_cutout_cam1_data = self._segment_live_image(live_image_cam1_np, "cam1")
-        live_cutout_cam2_data = self._segment_live_image(live_image_cam2_np, "cam2")        
 
-        if live_cutout_cam1_data is None or live_cutout_cam2_data is None:
-            print(f"Error: Segmentation failed or no objects found for both cameras for assembly key '{assembly_key}'.")
-            return None, None, None, None, None, -1.0, {}
-        assert((live_cutout_cam1_data is not None and live_cutout_cam1_data.shape[2] == 4) 
-               or (live_cutout_cam2_data is not None and live_cutout_cam2_data.shape[2] == 4))
-
-        # Save the segmented cutouts to temporary files (image is rgb)
-        if save_temp:
-            if live_cutout_cam1_data is not None:
-                live_cutout_cam1_path = self.temp_base_dir / f"live_cutout_{self.count:06d}_cam1.png"
-                bgr_cutout_cam1_data = cv2.cvtColor(live_cutout_cam1_data, cv2.COLOR_RGBA2BGRA)
-                cv2.imwrite(str(live_cutout_cam1_path), bgr_cutout_cam1_data)
-            if live_cutout_cam2_data is not None:
-                live_cutout_cam2_path = self.temp_base_dir / f"live_cutout_{self.count:06d}_cam2.png"
-                bgr_cutout_cam2_data = cv2.cvtColor(live_cutout_cam2_data, cv2.COLOR_RGBA2BGRA)
-                cv2.imwrite(str(live_cutout_cam2_path), bgr_cutout_cam2_data)
-        sim_masks_cam1_map = self._get_simulation_masks_for_key_and_cam(assembly_key, "sim_cam1")
-        sim_masks_cam2_map = self._get_simulation_masks_for_key_and_cam(assembly_key, "sim_cam2")
+        # get sim cutout for each sim id
+        sim_masks_cam1_map, sim_boxes_cam1_map, sim_depth_cam1_map = self._get_simulation_masks_for_key_and_cam(assembly_key, "sim_cam1")
+        sim_masks_cam2_map, sim_boxes_cam2_map, sim_depth_cam2_map = self._get_simulation_masks_for_key_and_cam(assembly_key, "sim_cam2")
 
         if not sim_masks_cam1_map and not sim_masks_cam2_map:
             print(f"Warning: No simulation masks found for assembly key '{assembly_key}' for any camera.")
             return None, None, None, None, None, -1.0, {}
-
         unique_sim_ids = set(sim_masks_cam1_map.keys()).union(set(sim_masks_cam2_map.keys()))
         if not unique_sim_ids:
             print(f"Warning: No sim_ids could be extracted for assembly key '{assembly_key}'.")
             return None, None, None, None, None, -1.0, {}
 
-        best_transformed_cam1_imgs = None
-        best_transformed_cam2_imgs = None
+        # segment using expected box from simulation, if cur_assembling_step provided
+        sim_cam1_box = sim_boxes_cam1_map.get(cur_assembling_step) # None if cur_assembling_step is -1
+        sim_cam2_box = sim_boxes_cam2_map.get(cur_assembling_step)
+        live_crop_cam1_data, live_cutout_cam1_data_rgba, live_depth_cam1_data = self._segment_live_image(live_image_cam1_np, "cam1", 
+                                                                                                         depth_data_np=live_depth_cam1_np,
+                                                                                                         sim_cam_box=sim_cam1_box, display_plt=display)
+        live_crop_cam2_data, live_cutout_cam2_data_rgba, live_depth_cam2_data = self._segment_live_image(live_image_cam2_np, "cam2", 
+                                                                                                         depth_data_np=live_depth_cam2_np,
+                                                                                                         sim_cam_box=sim_cam2_box, display_plt=display)
+
+        if live_cutout_cam1_data_rgba is None and live_cutout_cam2_data_rgba is None:
+            print(f"Error: Segmentation failed or no objects found for both cameras for assembly key '{assembly_key}'.")
+            return None, None, None, None, None, -1.0, {}
+        assert((live_cutout_cam1_data_rgba is not None and live_cutout_cam1_data_rgba.shape[2] == 4) 
+               or (live_cutout_cam2_data_rgba is not None and live_cutout_cam2_data_rgba.shape[2] == 4))
+
+        # Save the segmented cutouts to temporary files (image is rgb)
+        if save:
+            if live_cutout_cam1_data_rgba is not None:
+                live_cutout_cam1_path = self.temp_base_dir / f"live_cutout_{self.count:06d}_cam1.png"
+                bgr_cutout_cam1_data = cv2.cvtColor(live_cutout_cam1_data_rgba, cv2.COLOR_RGBA2BGRA)
+                cv2.imwrite(str(live_cutout_cam1_path), bgr_cutout_cam1_data)
+            if live_cutout_cam2_data_rgba is not None:
+                live_cutout_cam2_path = self.temp_base_dir / f"live_cutout_{self.count:06d}_cam2.png"
+                bgr_cutout_cam2_data = cv2.cvtColor(live_cutout_cam2_data_rgba, cv2.COLOR_RGBA2BGRA)
+                cv2.imwrite(str(live_cutout_cam2_path), bgr_cutout_cam2_data)
+
+        # calculate iou to get best sim_id
         best_overall_sim_id = None
-        max_combined_iou = -1.0
+        max_combined_iou = -np.inf
+        max_combined_depthscore = -np.inf
+        best_cam1_transform_results = (None, None) # (transformed_cutout_sim_cam, T)
+        best_cam2_transform_results = (None, None)
         all_sim_id_results = {}
 
-        for sim_id in unique_sim_ids:
-            if debug_display:
-                print(f"{assembly_key}: comparing to sim_id {sim_id}")
+        live_cutout_cam1_data = self.rgba_to_bw(live_cutout_cam1_data_rgba)
+        live_cutout_cam2_data = self.rgba_to_bw(live_cutout_cam2_data_rgba)
 
-            if cur_assembling_step > -1 and sim_id >= cur_assembling_step:
-                # Skip sim_ids that are beyond the current assembly step
+        for sim_id in unique_sim_ids:
+            # Skip sim_ids that are beyond the current assembly step
+            if cur_assembling_step > -1 and sim_id > cur_assembling_step:
                 continue
 
-            num_valid_ious = 0
-            current_sum_iou = 0.0
-            # A "valid" IoU for averaging means a comparison was attempted and yielded a score.
-            # If a live mask is None, its IoU is 0. We count it if a sim mask existed for that view.
+            display_plt = display and (display_ids == [] or sim_id in display_ids)
+            if display_plt:
+                print("Sim_id", sim_id)
 
-            iou_cam1 = 0.0
-            sim_mask_p1 = sim_masks_cam1_map.get(sim_id)
-            if sim_mask_p1 is not None: # Ensure sim exist
+            ious = []
+            depthscores = []
+
+            sim_mask1 = sim_masks_cam1_map.get(sim_id)
+            sim_depth1 = sim_depth_cam1_map.get(sim_id)
+            if sim_mask1 is not None and live_cutout_cam1_data_rgba is not None: # Ensure sim exist
                 # live_cutout_cam1_data can be None, _calculate_mask_iou handles it
                 # convert to grayscale for IoU calculation
-                iou_cam1, transformed_cam1_imgs = calculate_mask_iou(live_cutout_cam1_data, sim_mask_p1, display=debug_display, transform=transform, scale=scale)
-                num_valid_ious += 1
-                current_sum_iou += iou_cam1
+                iou_cam1, depthscore_cam1, transformed_cutout_sim_cam1, T1 = calculate_mask_iou(live_cutout_cam1_data, sim_mask1, 
+                                                                            live_depth_cam1_data, sim_depth1,
+                                                                            ref_T=self.calibrated_T['sim_cam1'], 
+                                                                            compute_new_T=compute_new_T,
+                                                                            display_plt=display_plt)
+                if iou_cam1 >= 0:
+                    ious.append(iou_cam1)
+                depthscores.append(depthscore_cam1)
+            else:
+                transformed_cutout_sim_cam1 = T1 = None
 
-            iou_cam2 = 0.0
-            sim_mask_p2 = sim_masks_cam2_map.get(sim_id)
-            if sim_mask_p2 is not None and live_cutout_cam1_data is not None: # Ensure sim exist
+            sim_mask2 = sim_masks_cam2_map.get(sim_id)
+            sim_depth2 = sim_depth_cam2_map.get(sim_id)
+            if sim_mask2 is not None and live_cutout_cam2_data_rgba is not None: # Ensure sim exist
                 # live_cutout_cam2_data can be None, _calculate_mask_iou handles it
-                iou_cam2, transformed_cam2_imgs = calculate_mask_iou(live_cutout_cam2_data, sim_mask_p2, display=debug_display, transform=transform, scale=scale)
-                num_valid_ious += 1
-                current_sum_iou += iou_cam2
-            
-            combined_iou = (current_sum_iou / num_valid_ious) if num_valid_ious > 0 else 0.0
+                iou_cam2, depthscore_cam2, transformed_cutout_sim_cam2, T2 = calculate_mask_iou(live_cutout_cam2_data, sim_mask2, 
+                                                                            live_depth_cam2_data, sim_depth2,
+                                                                            ref_T=self.calibrated_T['sim_cam2'], 
+                                                                            compute_new_T=compute_new_T,
+                                                                            display_plt=display_plt)
+                if iou_cam2 >= 0:
+                    ious.append(iou_cam2)
+                depthscores.append(depthscore_cam2)
+            else:
+                transformed_cutout_sim_cam2 = T2 = None
+             
+            combined_iou = max(ious)
+            combined_depthscore = sum(depthscores)/len(depthscores)
 
             all_sim_id_results[sim_id] = {
                 'cam1_iou': iou_cam1, # Will be 0 if live_cutout_cam1_data was None or sim_mask_p1 was None
-                'cam2_iou': iou_cam2, # Will be 0 if live_cutout_cam2_data was None or sim_mask_p2 was None
+                'cam2_iou': iou_cam2,
                 'combined_iou': combined_iou,
-                'cam1_sim_mask': sim_mask_p1,
-                'cam2_sim_mask': sim_mask_p2
+                'cam1_depthscore': depthscore_cam1, # Will be 0 if live_cutout_cam1_data was None or sim_mask_p1 was None
+                'cam2_depthscore': depthscore_cam2,
+                'combined_depthscore': combined_depthscore,
+                'cam1_sim_mask': sim_mask1,
+                'cam2_sim_mask': sim_mask2,
             }
 
-            if combined_iou > max_combined_iou:
+            # if iou slightly lower than max, still update as long depth score is better
+            if (combined_iou > max_combined_iou) or \
+                (max_combined_iou - combined_iou < 0.01 and max_combined_depthscore < combined_depthscore): 
+                
                 max_combined_iou = combined_iou
+                max_combined_depthscore = combined_depthscore
                 best_overall_sim_id = sim_id
-                best_transformed_cam1_imgs = transformed_cam1_imgs
-                best_transformed_cam2_imgs = transformed_cam2_imgs
+                best_cam1_transform_results = (transformed_cutout_sim_cam1, T1)
+                best_cam2_transform_results = (transformed_cutout_sim_cam2, T2)
 
-        results = live_cutout_cam1_data, live_cutout_cam2_data, \
-                best_transformed_cam1_imgs, best_transformed_cam2_imgs, \
-                best_overall_sim_id, max_combined_iou, all_sim_id_results
+        best_transformed_cutout_sim_cam1, best_T1 = best_cam1_transform_results
+        best_transformed_cutout_sim_cam2, best_T2 = best_cam2_transform_results
 
-        return results
+        results = {'live_crop_cam1': live_crop_cam1_data,
+                   'live_crop_cam2': live_crop_cam2_data,
+                   'live_cutout_cam1': live_cutout_cam1_data,
+                   'live_cutout_cam2': live_cutout_cam2_data,
+                   'transformed_cutout_sim_cam1': best_transformed_cutout_sim_cam1,
+                   'transformed_cutout_sim_cam2': best_transformed_cutout_sim_cam2,
+                   'T1': best_T1,
+                   'T2': best_T2,
+                   'best_sim_id': best_overall_sim_id,
+                   'best_score': max_combined_iou,
+                   'details': all_sim_id_results}
+        return SimpleNamespace(**results)
 
     def cleanup_all_temp_dirs(self):
         """Cleans up the base temporary directory used by this instance."""
@@ -291,21 +392,21 @@ if __name__ == "__main__":
         live_image_cam1_np = cv2.cvtColor(live_image_cam1_np, cv2.COLOR_BGR2RGB)  # Convert to RGB
         live_image_cam2_np = cv2.cvtColor(live_image_cam2_np, cv2.COLOR_BGR2RGB)
         
-        cutout1, cutout2, transformed_cutout1, transformed_cutout2, best_id, best_score, details = inferer.infer_dual_camera(
+        results = inferer.infer_dual_camera(
             live_image_cam1_np,
             live_image_cam2_np,
             assembly_key
         )
 
         print(f"\n--- Inference Results {i+1} ---")
-        print(f"Best Matching Sim ID: {best_id}")
-        print(f"Best Combined IoU Score: {best_score:.4f}")
-        # print("\nDetails:")
-        # for sim_id, data in details.items():
-        #     print(f"  Sim ID {sim_id}:")
-        #     print(f"    Cam1 IoU: {data['cam1_iou']:.4f} ")
-        #     print(f"    Cam2 IoU: {data['cam2_iou']:.4f} ")
-        #     print(f"    Combined IoU: {data['combined_iou']:.4f}")
+        print(f"Best Matching Sim ID: {results.best_sim_id}")
+        print(f"Best Combined IoU Score: {results.best_score:.4f}")
+        print("\nDetails:")
+        for sim_id, data in results.details.items():
+            print(f"  Sim ID {sim_id}:")
+            print(f"    Cam1 IoU: {data['cam1_iou']:.4f} ")
+            print(f"    Cam2 IoU: {data['cam2_iou']:.4f} ")
+            print(f"    Combined IoU: {data['combined_iou']:.4f}")
 
     # Clean up all temporary files and directories created by the inferer
     #inferer.cleanup_all_temp_dirs()

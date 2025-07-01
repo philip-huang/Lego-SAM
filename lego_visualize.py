@@ -16,19 +16,15 @@ import os
 import time
 from tqdm import tqdm
 import subprocess
-
-
-def _fig_to_image(fig):
-    FigureCanvas(fig)  # attach a canvas if not already attached
-    fig.canvas.draw()
-    w, h = fig.canvas.get_width_height()
-    img = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8)
-    img = img.reshape((h, w, 4))
-    return img
+import argparse
+from datetime import datetime
 
 
 def _combine(img, transformed_cutout, color, size=5):
-    preprocessed_img = np.array(img)
+    if transformed_cutout is None:
+        return img
+    
+    preprocessed_img = np.copy(img)
 
     min_vals = minimum_filter(transformed_cutout.astype(np.uint8), size=size)
     max_vals = maximum_filter(transformed_cutout.astype(np.uint8), size=size)
@@ -45,8 +41,10 @@ def _color_gradient(score):
     return [c*255 for c in cmap(score)[:3]]
 
 
-def visualize(inferer, img1, img2, results, save_path="", display_plt=False, output_np_array=True):
-    _, _, transformed_cutouts1, transformed_cutouts2, best_id, best_score, details = results
+def visualize(results, cur_assembling_step=-1, save_path=""):
+    best_id = results.best_sim_id
+    best_score = results.best_score
+    details = results.details
 
     if best_id is not None:
         color1 = _color_gradient(details[best_id]['cam1_iou'])
@@ -54,54 +52,109 @@ def visualize(inferer, img1, img2, results, save_path="", display_plt=False, out
     else:
         color1 = color2 = [255, 0, 0]
         
-    img1_segemented = inferer.segmenter_cam1.load_and_preprocess_image(img1)
-    if transformed_cutouts1 is not None:
-        img1_segemented = _combine(img1_segemented, transformed_cutouts1[0], [255,255,255], size=3)
-        img1_segemented = _combine(img1_segemented, transformed_cutouts1[1], color1, size=7)
+    img1_segmented = results.live_crop_cam1
+    img1_segmented = _combine(img1_segmented, results.live_cutout_cam1, [255,255,255], size=3)
+    img1_segmented = _combine(img1_segmented, results.transformed_cutout_sim_cam1, color1, size=7)
 
-    img2_segemented = inferer.segmenter_cam2.load_and_preprocess_image(img2)
-    if transformed_cutouts2 is not None:
-        img2_segemented = _combine(img2_segemented, transformed_cutouts2[0], [255,255,255], size=3)
-        img2_segemented = _combine(img2_segemented, transformed_cutouts2[1], color2, size=7)
+    img2_segmented = results.live_crop_cam2
+    img2_segmented = _combine(img2_segmented, results.live_cutout_cam2, [255,255,255], size=3)
+    img2_segmented = _combine(img2_segmented, results.transformed_cutout_sim_cam2, color2, size=7)
 
-    fig, axs = plt.subplots(1, 2, figsize=(8, 4))
+    combined_img = np.hstack((img1_segmented, img2_segmented))
 
-    axs[0].imshow(img1_segemented)
-    axs[0].set_title('Camera 1')
-    axs[1].imshow(img2_segemented)
-    axs[1].set_title('Camera 2')
 
-    for ax in axs:
-        ax.axis('off')
+    text_lines = [f'Step: {best_id}', f'Expected: {cur_assembling_step}', f'Score: {best_score:.4f}']
 
-    # text below the subplots
-    fig.text(0.04, 0.01, f'Step: {best_id}\nScore: {best_score:.4f}', ha='left', va='bottom', fontsize=12)
+    (text_width, text_height), _ = cv2.getTextSize(text_lines[0], cv2.FONT_HERSHEY_SIMPLEX, 1, 2)
+    padding = 20
+    total_text_height = len(text_lines) * text_height + (len(text_lines) + 1) * padding
+    white_bg = np.ones((total_text_height, combined_img.shape[1], 3), dtype=np.uint8) * 255
 
-    plt.tight_layout(rect=[0, 0.03, 1, 1.2])  # leave room for bottom text
+    for i, text in enumerate(text_lines):
+        text_x = 20
+        text_y = (padding + text_height) * (i+1)
+        cv2.putText(white_bg, text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
+    
+    final_img = np.vstack((combined_img, white_bg))
     
     if save_path:
-        plt.savefig(save_path, bbox_inches='tight')
+        cv2.imwrite(save_path, cv2.cvtColor(final_img, cv2.COLOR_RGB2BGR))
 
-    if display_plt:
-        plt.show()
-
-    if output_np_array:
-        return _fig_to_image(fig)
-    
-    plt.close()
+    return final_img
     
 
-# Example:
-# python3 lego_visualize.py $task
+def parse_expected_step_file(expected_step_txt_path):
+    with open(expected_step_txt_path) as f:
+        expected_steps = [*map(int, f.read().strip().split('\n'))]
+    return lambda i: expected_steps[i]
 
-# outputs video sideviewfail_$task.mp4
+
+def num_frames(task, SIM_DATA_ROOT):
+    assembly_key = task
+    live_image_dir1 = Path(SIM_DATA_ROOT, "cam1", assembly_key)
+    live_image_dir2 = Path(SIM_DATA_ROOT, "cam2", assembly_key)
+
+    # open the live image folders and count the number of images
+    live_images_cam1 = list(live_image_dir1.glob("*.jpg"))
+    live_images_cam2 = list(live_image_dir2.glob("*.jpg"))
+    length = min(len(live_images_cam1), len(live_images_cam2))  # Ensure both cameras have the same number of images
+    assert(length > 0)
+    
+    return length
+
+
+def load_frame(task, frame_idx, SIM_DATA_ROOT):
+    assembly_key = task
+    live_image_dir1 = Path(SIM_DATA_ROOT, "cam1", assembly_key)
+    live_image_dir2 = Path(SIM_DATA_ROOT, "cam2", assembly_key)
+
+    img1_name = f'{frame_idx:06d}.jpg'
+    img2_name = f'{frame_idx:06d}.jpg'
+    live_image_cam1_np = cv2.cvtColor(cv2.imread(str(live_image_dir1 / img1_name), cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)  # Convert to RGB
+    live_image_cam2_np = cv2.cvtColor(cv2.imread(str(live_image_dir2 / img2_name), cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)  # Convert to RGB
+    live_depth_cam1_np = np.load(str(live_image_dir1 / img1_name).replace('.jpg', '_depth.npz'))['arr_0']
+    live_depth_cam2_np = np.load(str(live_image_dir2 / img2_name).replace('.jpg', '_depth.npz'))['arr_0']
+
+    if live_image_cam1_np is None or live_image_cam2_np is None:
+        print(f"Error: Failed to read one of the live images for assembly key '{assembly_key}'.")
+        exit(0)
+
+    return live_image_cam1_np, live_image_cam2_np, live_depth_cam1_np, live_depth_cam2_np
+
+
+'''
+Example:
+
+python3 lego_visualize.py --task=$task
+python3 lego_visualize.py --task=$task --expected_path='outputs/videos/lego_sideview_'$task'_expected.txt'
+
+'''
 
 if __name__ == "__main__":
-    TASK = sys.argv[1] # cliff, R, faucet, etc.
-    temp_video_dir = './temp_online_inference/video'
+    parser = argparse.ArgumentParser(description="Example script using argparse")
+    parser.add_argument("--task", type=str, help='cliff, R, faucet, etc.', required=True)
+    parser.add_argument("--use_expected", action='store_true')
+
+    args = parser.parse_args()
+
+    task = args.task
+    temp_video_dir = f'output_videos/temp'
+    video_dir = f'output_videos'
+    step_path = f'outputs/assembling_step/{args.task}.txt'
+
+    cleanup = True
 
     ################
+
+    if args.use_expected:
+        get_expected_step = parse_expected_step_file(step_path)
+        output_filename = f'{video_dir}/lego_sideview_{task}_withstep_{datetime.now().strftime("%m%d%y")}'
+    else:
+        get_expected_step = lambda _: -1
+        output_filename = f'{video_dir}/lego_sideview_{task}_nostep_{datetime.now().strftime("%m%d%y")}'
     
+    ################
+
     print('Initializing inferer...')
     SIM_DATA_ROOT = "outputs" # Root dir where sim_cam1/, sim_cam2/ exist
     SAM2_CHECKPOINT = "./checkpoints/sam2.1_hiera_large.pt" # Path to your SAM2 model
@@ -113,40 +166,35 @@ if __name__ == "__main__":
         sam2_model_config_path=SAM2_CONFIG,
         device="cuda" # Use "cuda" if available and desired
     )
+    
+    # ################
 
-    assembly_key = TASK
-    live_image_dir1 = Path(SIM_DATA_ROOT, "cam1", assembly_key)
-    live_image_dir2 = Path(SIM_DATA_ROOT, "cam2", assembly_key)
-
-    # open the live image folders and count the number of images
-    live_images_cam1 = list(live_image_dir1.glob("*.jpg"))
-    live_images_cam2 = list(live_image_dir2.glob("*.jpg"))
-    length = min(len(live_images_cam1), len(live_images_cam2))  # Ensure both cameras have the same number of images
-
-    ################
-
-    inferer.cleanup_all_temp_dirs()
+    if cleanup:
+        inferer.cleanup_all_temp_dirs()
     os.makedirs(temp_video_dir, exist_ok=True)
 
-    for i in tqdm(range(length), total=length):
-        img1_name = f'{i:06d}.jpg'
-        img2_name = f'{i:06d}.jpg'
-        live_image_cam1_np = cv2.imread(str(live_image_dir1 / img1_name), cv2.IMREAD_COLOR)
-        live_image_cam2_np = cv2.imread(str(live_image_dir2 / img2_name), cv2.IMREAD_COLOR)
+    predictions_str = ''
 
-        if live_image_cam1_np is None or live_image_cam2_np is None:
-            print(f"Error: Failed to read one of the live images for assembly key '{assembly_key}'.")
-            continue
-        live_image_cam1_np = cv2.cvtColor(live_image_cam1_np, cv2.COLOR_BGR2RGB)  # Convert to RGB
-        live_image_cam2_np = cv2.cvtColor(live_image_cam2_np, cv2.COLOR_BGR2RGB)
+    length = num_frames(task, SIM_DATA_ROOT)
+    for frame_idx in tqdm(range(length), total=length):
+        cur_assembling_step = get_expected_step(frame_idx)
+        
+        live_image_cam1_np, live_image_cam2_np, live_depth_cam1_np, live_depth_cam2_np = load_frame(task, frame_idx, SIM_DATA_ROOT)
 
         results = inferer.infer_dual_camera(
             live_image_cam1_np,
             live_image_cam2_np,
-            assembly_key
+            task,
+            live_depth_cam1_np=live_depth_cam1_np,
+            live_depth_cam2_np=live_depth_cam2_np,
+            cur_assembling_step=cur_assembling_step,
+            compute_new_T=False,
+            save=False
         )
 
-        visualize(inferer, live_image_cam1_np, live_image_cam2_np, results,
-                save_path=os.getcwd()+f'/temp_online_inference/video/{i:06d}.png', display_plt=False)
+        visualize(results, cur_assembling_step, save_path=f'{temp_video_dir}/{frame_idx:06d}.png')
 
-    subprocess.call(f'ffmpeg -framerate 30 -i ./temp_online_inference/video/%06d.png -c:v libx264 -r 30 -pix_fmt yuv420p sideviewfail_{TASK}.mp4', shell=True, text=True)
+        with open(output_filename + '.txt', 'a') as f:
+            f.write(str(results.best_sim_id) + '\n')
+
+    subprocess.call(f'ffmpeg -y -framerate 2 -i {temp_video_dir}/%06d.png -c:v libx264 -r 2 -pix_fmt yuv420p {output_filename}.mp4', shell=True, text=True)
