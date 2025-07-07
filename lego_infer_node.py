@@ -244,7 +244,7 @@ class DualCameraLegoClient:
         best_score = results.best_score
 
         visualize_path = self.inferer.temp_base_dir / f"visualize_{self.inferer.count:06d}.png"
-        visualize_img = lego_visualize.visualize(self.inferer, img_cam1_rgb, img_cam2_rgb, results, cur_assembling_step, save_path=visualize_path)
+        visualize_img = lego_visualize.visualize(results, cur_assembling_step, save_path=visualize_path)
 
         # # Publish cutouts (RGBA)
         # if live_cutout_cam1_rgba is not None:
