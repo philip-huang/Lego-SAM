@@ -11,7 +11,7 @@ else
   echo "No task provided, using default tasks: ${tasks[@]}"
 fi
 
-SIM_BASE_FOLDER="/home/mfi/repos/ros1_ws/src/ruixuan/Robot_Digital_Twin/gazebo/outputs"
+SIM_BASE_FOLDER="$(dirname "$0")/../Robot_Digital_Twin/gazebo/outputs"
 
 # Iterate over the tasks
 for task in "${tasks[@]}"

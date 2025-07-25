@@ -81,6 +81,10 @@ class LegoSegmenter:
             "sim_cam2": (1700, 475, 2350, 1125),
             "default": None
         }
+        for key, value in self.crop_box_dict.items():
+            if value is not None:
+                assert value[2]-value[0] == value[3]-value[1], f"Crop box for {key} must be square (width == height)."
+            
         self.depth_normalize_range_dict = {
             "cam1": (700, 900),  # (min, max)
             "cam2": (700, 900),
@@ -523,13 +527,24 @@ def main():
     parser.add_argument("--force-cpu", action="store_true", help="Force use of CPU even if CUDA is available.")
     parser.add_argument("--top-k", type=int, default=1, help="Number of top detections to process from Grounding DINO.")
 
-    # Example run: processing sim_cam images
+    # Example run: processing sim_czam images
 
     '''
-        for task in cliff faucet fish_high R S stairs_rotated; do
-            export task
-            /home/mmliu/.venv/bin/python lego_segmenter.py --img-folder "sim_images/sim_images_061925_depth/$task/cam1" --output-dir "outputs/sim_cam1/$task" --camera-name sim_cam1
-            /home/mmliu/.venv/bin/python lego_segmenter.py --img-folder "sim_images/sim_images_061925_depth/$task/cam2" --output-dir "outputs/sim_cam2/$task" --camera-name sim_cam2
+    # for task in cliff faucet fish_high R S stairs_rotated; do
+    # for task in bridge_small chair chair1 heart human sofa temple; do
+
+    for task in chair chair1 sofa temple; do
+        export task
+        cd ~/repos/ros1_ws/src/philip/Robot_Digital_Twin/gazebo/scripts
+        ./run_vis_assembly.sh $task
+        cd ~/repos/ros1_ws/src/philip/Lego-SAM
+        ./seg_all_sim.sh $task
+        done
+
+    for task in fish_high; do
+        export task
+        cd ~/repos/ros1_ws/src/philip/Lego-SAM
+        ./seg_all_sim.sh $task
         done
     '''
     
