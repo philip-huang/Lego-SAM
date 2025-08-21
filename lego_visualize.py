@@ -112,8 +112,15 @@ def load_frame(task, frame_idx, SIM_DATA_ROOT):
     img2_name = f'{frame_idx:06d}.jpg'
     live_image_cam1_np = cv2.cvtColor(cv2.imread(str(live_image_dir1 / img1_name), cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)  # Convert to RGB
     live_image_cam2_np = cv2.cvtColor(cv2.imread(str(live_image_dir2 / img2_name), cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)  # Convert to RGB
-    live_depth_cam1_np = np.load(str(live_image_dir1 / img1_name).replace('.jpg', '_depth.npz'))['arr_0']
-    live_depth_cam2_np = np.load(str(live_image_dir2 / img2_name).replace('.jpg', '_depth.npz'))['arr_0']
+    # if depth is available, load it
+    live_depth_cam1_np = None
+    live_depth_cam2_np = None
+    depth_path1 = (live_image_dir1 / img1_name).with_name(f"{(live_image_dir1 / img1_name).stem}_depth.npz")
+    depth_path2 = (live_image_dir2 / img2_name).with_name(f"{(live_image_dir2 / img2_name).stem}_depth.npz")
+    if depth_path1.exists() and depth_path2.exists():
+        # Load depth data
+        live_depth_cam1_np = np.load(str(depth_path1))['arr_0']
+        live_depth_cam2_np = np.load(str(depth_path2))['arr_0']
 
     if live_image_cam1_np is None or live_image_cam2_np is None:
         print(f"Error: Failed to read one of the live images for assembly key '{assembly_key}'.")

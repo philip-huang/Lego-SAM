@@ -145,6 +145,7 @@ class DualCameraLegoClient:
         sim_data_root = 'outputs' 
         sam2_checkpoint = './checkpoints/sam2.1_hiera_large.pt'
         sam2_config = 'configs/sam2.1/sam2.1_hiera_l.yaml'
+        crop_calibration_json_path = '/home/mfi/repos/ros1_ws/src/philip/Lego-SAM/crop_calibration/'
         device = 'cuda' # or 'cpu'
         
         self.output_cutout1_topic = '/cam_destroyer/lego_cutout'
@@ -157,11 +158,13 @@ class DualCameraLegoClient:
         #sam2_checkpoint = str(script_dir / sam2_checkpoint)
         #sam2_config = str(script_dir / sam2_config)
         print(f"Using sim_data_root: {sim_data_root}, sam2_checkpoint: {sam2_checkpoint}, sam2_config: {sam2_config}")
+        print(f"crop_calibration_json: {crop_calibration_json_path}")
         
         self.inferer = OnlineLegoInferer(
             sim_data_root_dir=sim_data_root, # Use absolute path if necessary
             sam2_checkpoint_path=sam2_checkpoint, # Use absolute path
             sam2_model_config_path=sam2_config, # Use absolute path
+            crop_calibration_json_path=crop_calibration_json_path,
             device=device
         )
         print("OnlineLegoInferer initialized.")
@@ -238,6 +241,7 @@ class DualCameraLegoClient:
             img_cam1_rgb,
             img_cam2_rgb,
             self.task, # assembly_key,
+            compute_new_T=False,
             cur_assembling_step=cur_assembling_step,
         )
         best_sim_id = results.best_sim_id

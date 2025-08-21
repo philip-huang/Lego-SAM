@@ -29,6 +29,7 @@ class OnlineLegoInferer:
                  sim_data_root_dir: str,
                  sam2_checkpoint_path: str,
                  sam2_model_config_path: str,
+                 crop_calibration_json_path: str,
                  temp_base_dir: str = "temp_online_inference",
                  device: str = "cuda",
                  dino_box_threshold: float = 0.3,
@@ -76,10 +77,19 @@ class OnlineLegoInferer:
         self.sim_mask_info_cache = {} # Cache: {assembly_key: {sim_cam_name: {sim_id: path}}}
         self.count = 0
 
-        # based on 05/26/2025 calibration
-        self.calibrated_T = {'sim_cam1': (np.array([[0.9277678728103638, 0.0, 39.141693115234375], [0.0, 0.9277678728103638, 60.713409423828125], [0.0, 0.0, 1.0]]),(0.8585859110425732, 68.25756399151715)),
-		'sim_cam2': (np.array([[0.9247972369194031, 0.0, 126.83160400390625], [0.0, 0.9247972369194031, 13.537094116210938], [0.0, 0.0, 1.0]]),(1.281410217285156, 25.6279296875))}
-        
+        files = glob.glob(os.path.join(crop_calibration_json_path, "crop_calibration_*.json"))
+        if not files:
+            raise FileNotFoundError("No calibration JSON files found.")
+        files.sort()
+        crop_calibration_json = files[-1]
+        print(f'Using {crop_calibration_json}')
+        with open(crop_calibration_json, "r") as f:
+            loaded = json.load(f)
+        self.calibrated_T = {
+            key: (np.array(value["matrix"]), tuple(value["params"]))
+            for key, value in loaded.items()
+        }
+
     def _get_simulation_masks_for_key_and_cam(self, assembly_key: str, sim_camera_name: str): # -> dict[int, str]:
         """
         Loads and caches paths to simulation masks for a given assembly_key and sim_camera_name.
@@ -222,8 +232,12 @@ class OnlineLegoInferer:
             return None, None, None, None, None, -1.0, {}
 
         # segment using expected box from simulation, if cur_assembling_step provided
-        sim_cam1_box = sim_boxes_cam1_map.get(cur_assembling_step) # None if cur_assembling_step is -1
-        sim_cam2_box = sim_boxes_cam2_map.get(cur_assembling_step)
+        if not compute_new_T:
+            sim_cam1_box = sim_boxes_cam1_map.get(cur_assembling_step) # None if cur_assembling_step is -1
+            sim_cam2_box = sim_boxes_cam2_map.get(cur_assembling_step)
+        else:
+            sim_cam1_box = None
+            sim_cam2_box = None
         live_crop_cam1_data, live_cutout_cam1_data_rgba, live_depth_cam1_data = self._segment_live_image(live_image_cam1_np, "cam1", 
                                                                                                          depth_data_np=live_depth_cam1_np,
                                                                                                          sim_cam_box=sim_cam1_box, display_plt=display)
@@ -354,6 +368,8 @@ if __name__ == "__main__":
     SIM_DATA_ROOT = "outputs" # Root dir where sim_cam1/, sim_cam2/ exist
     SAM2_CHECKPOINT = "./checkpoints/sam2.1_hiera_large.pt" # Path to your SAM2 model
     SAM2_CONFIG = "configs/sam2.1/sam2.1_hiera_l.yaml"    # Path to your SAM2 config
+
+    CROP_CALIBRATION_JSON_PATH = '/home/mfi/repos/ros1_ws/src/philip/Lego-SAM/crop_calibration/'
     
     import argparse
     parser = argparse.ArgumentParser(description="Run online Lego inference with dual cameras.")
@@ -367,6 +383,7 @@ if __name__ == "__main__":
         sim_data_root_dir=SIM_DATA_ROOT,
         sam2_checkpoint_path=SAM2_CHECKPOINT,
         sam2_model_config_path=SAM2_CONFIG,
+        crop_calibration_json_path=CROP_CALIBRATION_JSON_PATH,
         device="cuda" # Use "cuda" if available and desired
     )
 
@@ -389,8 +406,8 @@ if __name__ == "__main__":
         if live_image_cam1_np is None or live_image_cam2_np is None:
             print(f"Error: Failed to read one of the live images for assembly key '{assembly_key}'.")
             continue
-        live_image_cam1_np = cv2.cvtColor(live_image_cam1_np, cv2.COLOR_BGR2RGB)  # Convert to RGB
-        live_image_cam2_np = cv2.cvtColor(live_image_cam2_np, cv2.COLOR_BGR2RGB)
+        # live_image_cam1_np = cv2.cvtColor(live_image_cam1_np, cv2.COLOR_2RGB)  # Convert to RGB
+        # live_image_cam2_np = cv2.cvtColor(live_image_cam2_np, cv2.COLOR_BGR2RGB)
         
         results = inferer.infer_dual_camera(
             live_image_cam1_np,
