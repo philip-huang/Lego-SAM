@@ -4,6 +4,7 @@
 ROS python node to connect to a rosbridge server, subscribe to two camera topics and do online inference using the geometric Lego state inferer.
 """
 import asyncio
+from turtle import stamp
 import websockets
 import json
 import cv2
@@ -54,6 +55,22 @@ def cv_image_to_ros_image_json(cv_image, encoding, frame_id="camera", timestamp=
         "data": image_data_b64
     }
     return msg
+
+def cv_image_rgb_to_compressed_json(cv_image_rgb, frame_id="camera", timestamp=None, quality=85):                                                                                                                                              
+      if timestamp is None:                                                                                                                                                                                                                      
+          timestamp = time.time()                                                                                                                                                                                                                
+      bgr = cv2.cvtColor(cv_image_rgb, cv2.COLOR_RGB2BGR)                                                                                                                                                                                        
+      ok, buf = cv2.imencode('.jpg', bgr, [int(cv2.IMWRITE_JPEG_QUALITY), quality])                                                                                                                                                              
+      if not ok:                                                                                                                                                                                                                                 
+          raise RuntimeError("cv2.imencode failed for visualize frame")                                                                                                                                                                          
+      return {                                                                                                                                                                                                                                   
+          "header": {                                                                                                                                                                                                                            
+              "stamp": {"secs": int(timestamp), "nsecs": int((timestamp % 1) * 1e9)},
+              "frame_id": frame_id,
+          },
+          "format": "jpeg",
+          "data": base64.b64encode(buf.tobytes()).decode('utf-8'),                                                                                                                                                                               
+      }
 
 # Helper to convert ROS Image JSON from rosbridge to OpenCV image
 def ros_image_json_to_cv_image(json_msg):
@@ -134,7 +151,7 @@ class DualCameraLegoClient:
         self.rosbridge_url = rosbridge_url
         self.task = task # assembly_key
         self.inference_frequency = inference_frequency # Hz
-
+        self.output_visualize_topic = '/lego/visualize/compressed'
 
         # --- Parameters (adjust as needed, or load from config file/env vars) ---
         self.cam1_topic = '/cam_destroyer/color/image_raw/compressed'
@@ -186,6 +203,14 @@ class DualCameraLegoClient:
         }
         await websocket.send(json.dumps(publish_msg))
         # print(f"Sent message to {topic_name}")
+    
+    async def advertise_topic(self, websocket, topic_name, msg_type):                                                                                                                                                                              
+      await websocket.send(json.dumps({
+          "op": "advertise",                                                                                                                                                                                                                     
+          "topic": topic_name,
+          "type": msg_type,                                                                                                                                                                                                                      
+      }))         
+      print(f"Advertised {topic_name} as {msg_type}")
 
     async def subscribe_to_topic(self, websocket, topic_name, msg_type="sensor_msgs/CompressedImage"):
         subscribe_msg = {
@@ -248,7 +273,14 @@ class DualCameraLegoClient:
         best_score = results.best_score
 
         visualize_path = self.inferer.temp_base_dir / f"visualize_{self.inferer.count:06d}.png"
-        visualize_img = lego_visualize.visualize(results, cur_assembling_step, save_path=visualize_path)
+        visualize_img_rgb = lego_visualize.visualize(results, cur_assembling_step, save_path=str(visualize_path))
+                                                                                                                                                                                                                                                 
+        frame_id = header_cam1_orig.get('frame_id', 'lego_visualize') if header_cam1_orig else 'lego_visualize'                                                                                                                                        
+        stamp = header_cam1_orig['stamp']                                                                                                                                                                                                              
+        ts = stamp['secs'] + stamp['nsecs'] * 1e-9 if header_cam1_orig else None                                                                                                                                                                       
+        vis_msg = cv_image_rgb_to_compressed_json(visualize_img_rgb, frame_id=frame_id, timestamp=ts)                                                                                                                                                  
+        await self.publish_message(self.websocket_connection, self.output_visualize_topic,                                                                                                                                                             
+                             "sensor_msgs/CompressedImage", vis_msg)
 
         # # Publish cutouts (RGBA)
         # if live_cutout_cam1_rgba is not None:
@@ -321,6 +353,9 @@ class DualCameraLegoClient:
             await self.subscribe_to_topic(websocket, self.cam1_topic)
             await self.subscribe_to_topic(websocket, self.cam2_topic)
             await self.subscribe_to_topic(websocket, self.lego_topic, msg_type="std_msgs/Int32")
+
+            await self.advertise_topic(websocket, self.output_visualize_topic, "sensor_msgs/CompressedImage")                                                                                                                                              
+            await self.advertise_topic(websocket, self.output_detection_topic, "std_msgs/String")
 
             # Start the periodic inference scheduler as a background task
             scheduler_task = asyncio.create_task(self.periodic_inference_scheduler())
