@@ -268,13 +268,15 @@ class DualCameraLegoClient:
             self.task, # assembly_key,
             compute_new_T=False,
             cur_assembling_step=cur_assembling_step,
+            save=False,
         )
         best_sim_id = results.best_sim_id
         best_score = results.best_score
 
         visualize_path = self.inferer.temp_base_dir / f"visualize_{self.inferer.count:06d}.png"
-        visualize_img_rgb = lego_visualize.visualize(results, cur_assembling_step, save_path=str(visualize_path))
-                                                                                                                                                                                                                                                 
+        #visualize_img_rgb = lego_visualize.visualize(results, cur_assembling_step, save_path=str(visualize_path))
+        visualize_img_rgb = lego_visualize.visualize(results, cur_assembling_step, save_path=None)
+                                                                                                                                        
         frame_id = header_cam1_orig.get('frame_id', 'lego_visualize') if header_cam1_orig else 'lego_visualize'                                                                                                                                        
         stamp = header_cam1_orig['stamp']                                                                                                                                                                                                              
         ts = stamp['secs'] + stamp['nsecs'] * 1e-9 if header_cam1_orig else None                                                                                                                                                                       

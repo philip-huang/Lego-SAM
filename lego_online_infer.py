@@ -139,7 +139,7 @@ class OnlineLegoInferer:
         """
         segmenter = self.segmenter_cam1 if camera_name == "cam1" else self.segmenter_cam2
         
-        cropped_img, mask_np = segmenter.generate_single_mask_from_data(image_data_np, sim_cam_box, text_prompt=segmenter.default_text_prompt, save_id = self.count, display_plt=display_plt) 
+        cropped_img, mask_np = segmenter.generate_single_mask_from_data(image_data_np, sim_cam_box, text_prompt=segmenter.default_text_prompt, save_id = None, display_plt=display_plt) 
         
         if mask_np is None:
             # print(f"Debug: Segmentation returned None for live image from {camera_name}.")
